@@ -1,0 +1,4 @@
+[dbmate]
+url = "env:DATABASE_URL"
+migrations-dir = "./db/migrations"
+no-dump-schema = true

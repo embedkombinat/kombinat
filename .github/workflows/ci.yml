@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kombinat
+          POSTGRES_PASSWORD: kombinat
+          POSTGRES_DB: kombinat_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kombinat"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Install dbmate
+        run: |
+          curl -fsSL -o /usr/local/bin/dbmate https://github.com/amacneil/dbmate/releases/latest/download/dbmate-linux-amd64
+          chmod +x /usr/local/bin/dbmate
+
+      - name: Run migrations
+        env:
+          DATABASE_URL: postgresql://kombinat:kombinat@localhost:5432/kombinat_test?sslmode=disable
+        run: dbmate up
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy kombinat/
+
+      - name: Test
+        env:
+          DATABASE_URL: postgresql://kombinat:kombinat@localhost:5432/kombinat_test
+          GITHUB_CLIENT_ID: test
+          GITHUB_CLIENT_SECRET: test
+          JWT_SECRET: deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+        run: uv run pytest -v --tb=short
