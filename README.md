@@ -5,33 +5,33 @@
 <h1 align="center">kombinat</h1>
 
 <p align="center">
-  <strong>Distributed annotation coordination server for <a href="https://embedcollective.com">Embed Collective</a></strong>
+  <strong>Distributed annotation coordination server for <a href="https://embedkombinat.github.io/embed-kombinat.github.io/index.html">Embed Kombinat</a></strong>
 </p>
 
 <p align="center">
-  <a href="https://github.com/embedcollective/kombinat/actions"><img src="https://img.shields.io/github/actions/workflow/status/embedcollective/kombinat/ci.yml?branch=main&style=flat-square" alt="CI"></a>
-  <a href="https://github.com/embedcollective/kombinat"><img src="https://img.shields.io/badge/python-3.12+-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+"></a>
-  <a href="https://github.com/embedcollective/kombinat/blob/main/LICENSE"><img src="https://img.shields.io/github/license/embedcollective/kombinat?style=flat-square" alt="License"></a>
-  <a href="https://embedcollective.com"><img src="https://img.shields.io/badge/Embed_Collective-landing_page-black?style=flat-square" alt="Website"></a>
+  <a href="https://github.com/embedkombinat/kombinat/actions"><img src="https://img.shields.io/github/actions/workflow/status/embedkombinat/kombinat/ci.yml?branch=main&style=flat-square" alt="CI"></a>
+  <a href="https://github.com/embedkombinat/kombinat"><img src="https://img.shields.io/badge/python-3.12+-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+"></a>
+  <a href="https://github.com/embedkombinat/kombinat/blob/main/LICENSE"><img src="https://img.shields.io/github/license/embedkombinat/kombinat?style=flat-square" alt="License"></a>
+  <a href="https://embedkombinat.github.io/embed-kombinat.github.io/index.html"><img src="https://img.shields.io/badge/Embed_Kombinat-landing_page-black?style=flat-square" alt="Website"></a>
 </p>
 
 ---
 
-Kombinat is the backend that powers [Embed Collective](https://embedcollective.com) — an open, community-driven effort to build high-quality embedding models through distributed human+LLM annotation.
+Kombinat is the backend that powers [Embed Kombinat](https://embedkombinat.github.io/embed-kombinat.github.io/index.html) — an open, community-driven effort to build high-quality embedding models through distributed human+LLM annotation.
 
-It coordinates batches of query-document pairs across anonymous contributors running the [**annotator**](https://github.com/embedcollective/annotator) CLI on their own hardware, validates results with honeypot quality checks, and aggregates labels at scale.
+It coordinates batches of query-document pairs across anonymous contributors running the [**annotator**](https://github.com/embedkombinat/annotator) CLI on their own hardware, validates results with honeypot quality checks, and aggregates labels at scale.
 
 ## How it works
 
 1. The **ingest pipeline** loads source datasets, mines hard negatives via BM25 + dense retrieval + RRF fusion, and writes candidate pairs to PostgreSQL.
-2. Contributors run the [annotator](https://github.com/embedcollective/annotator) CLI, which claims a batch of unlabeled pairs, scores them locally with a quantized LLM (Qwen 3B-7B), and streams labels back.
+2. Contributors run the [annotator](https://github.com/embedkombinat/annotator) CLI, which claims a batch of unlabeled pairs, scores them locally with a quantized LLM (Qwen 3B-7B), and streams labels back.
 3. Kombinat **validates** annotations against embedded honeypots (~5% of each batch), updates contributor reputation, and promotes pairs to `verified` or `rejected` via majority vote.
 
 ## Quickstart
 
 ```bash
 # clone
-git clone https://github.com/embedcollective/kombinat.git
+git clone https://github.com/embedkombinat/kombinat.git
 cd kombinat
 
 # install
@@ -50,19 +50,6 @@ Mine hard-negative pairs from a HuggingFace dataset split and load them into the
 pip install -e ".[ingest]"
 python -m kombinat.tools.ingest --split squad --device cpu
 ```
-
-## API
-
-| Endpoint | Description |
-|---|---|
-| `POST /v1/auth/github` | GitHub OAuth token exchange |
-| `GET  /v1/contributors/me` | Current contributor profile |
-| `POST /v1/batches/claim` | Claim a batch of unlabeled pairs |
-| `DELETE /v1/batches/{id}` | Release an unfinished batch |
-| `POST /v1/annotations` | Submit annotations for a batch |
-| `GET  /v1/stats` | Public progress stats |
-
----
 
 ## Annotation ledger
 
@@ -106,10 +93,4 @@ Source data comes from [nomic-ai/nomic-embed-unsupervised-data](https://huggingf
 
 ## Contributing
 
-Want to contribute compute? Install the [annotator](https://github.com/embedcollective/annotator) and start labeling — works on NVIDIA GPUs, Apple Silicon, or CPU.
-
-## Links
-
-- [Embed Collective](https://embedcollective.com) — project homepage
-- [annotator](https://github.com/embedcollective/annotator) — distributed annotation CLI
-- [nomic-embed-unsupervised-data](https://huggingface.co/datasets/nomic-ai/nomic-embed-unsupervised-data) — source dataset
+Want to contribute compute? Install the [annotator](https://github.com/embedkombinat/annotator) and start labeling — works on NVIDIA GPUs, Apple Silicon, or CPU.
