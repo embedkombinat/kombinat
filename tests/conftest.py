@@ -71,9 +71,13 @@ async def db_pool() -> AsyncIterator[asyncpg.Pool]:
 
 
 @pytest.fixture(autouse=True)
-async def clean_tables(db_pool: asyncpg.Pool) -> None:
-    """Truncate all tables between tests."""
-    await db_pool.execute(
+async def clean_tables(request: pytest.FixtureRequest) -> None:
+    """Truncate all tables between tests (skipped for tests that don't use the DB)."""
+    # Avoid setting up db_pool for tests that don't need it (e.g. ingest unit tests)
+    if "tests/ingest" in str(request.fspath):
+        return
+    pool: asyncpg.Pool = request.getfixturevalue("db_pool")
+    await pool.execute(
         "TRUNCATE pairs, annotations, batches, batch_pairs, contributors, honeypots CASCADE"
     )
 

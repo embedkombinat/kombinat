@@ -26,6 +26,9 @@ ingest = [
     "sentence-transformers>=3.3",
     "datasets>=3.1",
     "pyarrow>=18",
+    "faiss-cpu>=1.9",
+    "numpy>=1.26",
+    "rich>=13.9",
 ]
 
 [tool.ruff]
@@ -49,6 +52,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
+markers = ["slow: marks tests as slow (real model downloads, deselect with -m 'not slow')"]
 
 [build-system]
 requires = ["hatchling"]
