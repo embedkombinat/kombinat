@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
+import asyncpg
 from fastapi import APIRouter, Depends, HTTPException
 
 from kombinat.dependencies import get_current_contributor, get_db
@@ -13,7 +15,7 @@ from kombinat.validator.reputation import update_reputation
 if TYPE_CHECKING:
     import uuid
 
-    import asyncpg
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["annotations"])
 
@@ -102,8 +104,10 @@ async def submit_annotations(
                 hp_pass = await honeypot_check(db, ann.pair_id, ann.label)
                 honeypot_results.append(hp_pass)
 
-        except Exception:  # noqa: BLE001
-            # Unique constraint violation or other DB error
+        except asyncpg.UniqueViolationError:
+            rejected += 1
+        except asyncpg.PostgresError:
+            logger.exception("Database error inserting annotation for pair %s", ann.pair_id)
             rejected += 1
 
     # Update contributor totals
@@ -129,11 +133,12 @@ async def submit_annotations(
     # Update reputation (stub: no-op in v0)
     await update_reputation(db, contributor_id, honeypot_results)
 
-    # Mark batch as completed
-    await db.execute(
-        "UPDATE batches SET status = 'completed', completed_at = NOW() WHERE id = $1",
-        body.batch_id,
-    )
+    # Mark batch as completed only if at least one annotation was accepted
+    if accepted > 0:
+        await db.execute(
+            "UPDATE batches SET status = 'completed', completed_at = NOW() WHERE id = $1",
+            body.batch_id,
+        )
 
     # Compute honeypot accuracy
     honeypot_accuracy: float | None = None
@@ -145,7 +150,8 @@ async def submit_annotations(
         "SELECT total_input_tokens, total_output_tokens FROM contributors WHERE id = $1",
         contributor_id,
     )
-    assert updated is not None
+    if updated is None:
+        raise HTTPException(status_code=500, detail="Contributor record missing after update")
 
     return AnnotationResult(
         accepted=accepted,

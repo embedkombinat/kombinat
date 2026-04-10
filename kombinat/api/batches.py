@@ -96,7 +96,10 @@ async def claim_batch(
             contributor_id,
         )
 
+        import random
+
         all_rows = list(regular_rows) + list(honeypot_rows)
+        random.shuffle(all_rows)
 
         # If fewer honeypots than desired, fill remainder with regular pairs
         shortfall = requested_size - len(all_rows)
@@ -190,6 +193,9 @@ async def delete_batch(
 
     if row["contributor_id"] != contributor["id"]:
         raise HTTPException(status_code=403, detail="Not the batch owner")
+
+    if row["status"] != "assigned":
+        raise HTTPException(status_code=400, detail="Batch not in assigned status")
 
     await db.execute("UPDATE batches SET status = 'expired' WHERE id = $1", batch_id)
     return Response(status_code=204)

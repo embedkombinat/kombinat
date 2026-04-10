@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from kombinat.api.router import router as v1_router
 from kombinat.config import get_settings
@@ -40,8 +41,16 @@ app.include_router(v1_router)
 
 
 @app.get("/health", tags=["health"])
-async def health() -> dict[str, str]:
+async def health() -> JSONResponse:
     """Health check endpoint."""
     pool = app.state.db
     db_ok = await ping(pool)
-    return {"status": "ok", "db": "connected" if db_ok else "disconnected"}
+    if db_ok:
+        return JSONResponse(
+            content={"status": "ok", "db": "connected"},
+            status_code=200,
+        )
+    return JSONResponse(
+        content={"status": "error", "db": "disconnected"},
+        status_code=503,
+    )

@@ -1,3 +1,4 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +15,12 @@ class Settings(BaseSettings):
     # JWT
     jwt_secret: str = ""
     jwt_expiry_seconds: int = 604800  # 7 days
+
+    @model_validator(mode="after")
+    def _check_jwt_secret(self) -> "Settings":
+        if not self.jwt_secret:
+            raise ValueError("jwt_secret must be set to a non-empty value")
+        return self
 
     # App
     batch_default_size: int = 100

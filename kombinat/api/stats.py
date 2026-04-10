@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from kombinat.dependencies import get_db
 from kombinat.schemas.stats import StatsOut
@@ -32,7 +32,8 @@ async def get_stats(
             COUNT(*) FILTER (WHERE status = 'rejected') AS rejected
         FROM pairs"""
     )
-    assert pair_counts is not None
+    if pair_counts is None:
+        raise HTTPException(status_code=500, detail="Failed to query pair counts")
 
     # Contributor counts
     contributor_counts = await db.fetchrow(
@@ -41,7 +42,8 @@ async def get_stats(
             COUNT(*) FILTER (WHERE last_seen_at > NOW() - interval '24 hours') AS active_24h
         FROM contributors"""
     )
-    assert contributor_counts is not None
+    if contributor_counts is None:
+        raise HTTPException(status_code=500, detail="Failed to query contributor counts")
 
     # Token totals
     token_totals = await db.fetchrow(
@@ -50,7 +52,8 @@ async def get_stats(
             COALESCE(SUM(total_output_tokens), 0) AS output_tokens
         FROM contributors"""
     )
-    assert token_totals is not None
+    if token_totals is None:
+        raise HTTPException(status_code=500, detail="Failed to query token totals")
 
     # Pairs verified in the last 24h (approximate via annotations created)
     pairs_per_day_row = await db.fetchrow(
