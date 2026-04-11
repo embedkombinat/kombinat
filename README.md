@@ -47,8 +47,8 @@ uvicorn kombinat.main:app --reload
 Mine hard-negative pairs from a HuggingFace dataset split and load them into the database:
 
 ```bash
-pip install -e ".[ingest]"
-python -m kombinat.tools.ingest --split squad --device cpu
+uv sync --extra ingest
+uv run python -m kombinat.tools.ingest --split squad --embedding-device cpu
 ```
 
 ## Annotation ledger

@@ -19,6 +19,10 @@ class DenseIndex:
     doc_ids: list[str]
     dimension: int
     nlist: int
+    # Model used to build the index. None when the index was loaded from disk cache,
+    # in which case embed_queries() will load its own. Exposed so callers can reuse
+    # the freshly-loaded model for query embedding and avoid a second model load.
+    model: SentenceTransformer | None = None
 
 
 def compute_nprobe(n_docs: int, nlist: int, min_search_docs: int = 100_000) -> int:
@@ -89,7 +93,7 @@ def build_dense_index(corpus: Corpus, config: IngestConfig) -> DenseIndex:
     faiss.write_index(index, str(idx_path))
     ids_path.write_text(json.dumps(corpus.doc_ids))
 
-    return DenseIndex(index=index, doc_ids=corpus.doc_ids, dimension=dim, nlist=nlist)
+    return DenseIndex(index=index, doc_ids=corpus.doc_ids, dimension=dim, nlist=nlist, model=model)
 
 
 def dense_retrieve(
@@ -108,9 +112,18 @@ def dense_retrieve(
     return results
 
 
-def embed_queries(queries: list[str], config: IngestConfig) -> np.ndarray:
-    """Embed a batch of queries. Returns (n, dim) float32 array."""
-    model = SentenceTransformer(config.embedding_model, device=config.embedding_device)
+def embed_queries(
+    queries: list[str],
+    config: IngestConfig,
+    model: SentenceTransformer | None = None,
+) -> np.ndarray:
+    """Embed a batch of queries. Returns (n, dim) float32 array.
+
+    If `model` is provided, reuses it instead of loading a fresh SentenceTransformer —
+    callers should pass `DenseIndex.model` when available to avoid double loading.
+    """
+    if model is None:
+        model = SentenceTransformer(config.embedding_model, device=config.embedding_device)
     return model.encode(
         queries,
         batch_size=config.embedding_batch_size,

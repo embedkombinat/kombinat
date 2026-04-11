@@ -1,11 +1,13 @@
 """
 CLI entry point for the kombinat ingest tool.
 
-Usage:
-    python -m kombinat.tools.ingest --split squad
-    python -m kombinat.tools.ingest --split squad --max-docs 1000 --dry-run
-    python -m kombinat.tools.ingest --split paq --bm25-top-k 10000 --dense-top-k 10000
-    python -m kombinat.tools.ingest --split paq --embedding-model all-mpnet-base-v2
+Usage (run with uv from the kombinat/ project root):
+    uv run python -m kombinat.tools.ingest --split squad
+    uv run python -m kombinat.tools.ingest --split squad --max-docs 1000 --dry-run
+    uv run python -m kombinat.tools.ingest --split paq --bm25-top-k 10000 --dense-top-k 10000
+    uv run python -m kombinat.tools.ingest --split paq --embedding-model all-mpnet-base-v2
+
+Requires the `ingest` extras: `uv sync --extra ingest`.
 """
 from __future__ import annotations
 
@@ -19,11 +21,16 @@ from rich.panel import Panel
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from kombinat.tools.ingest.bm25 import build_bm25_index, bm25_retrieve
+from kombinat.tools.ingest.bm25 import bm25_retrieve, build_bm25_index
 from kombinat.tools.ingest.config import IngestConfig
-from kombinat.tools.ingest.dense import build_dense_index, compute_nprobe, dense_retrieve, embed_queries
+from kombinat.tools.ingest.dense import (
+    build_dense_index,
+    compute_nprobe,
+    dense_retrieve,
+    embed_queries,
+)
 from kombinat.tools.ingest.fusion import rrf_fuse
-from kombinat.tools.ingest.pairs import build_candidates, CandidatePair
+from kombinat.tools.ingest.pairs import CandidatePair, build_candidates
 from kombinat.tools.ingest.source import load_split
 from kombinat.tools.ingest.writer import write_batch
 
@@ -135,9 +142,11 @@ async def main() -> None:
     )
 
     # ── 4. Embed queries ──
+    # Reuse the model loaded during index build. When the index was loaded from cache,
+    # dense_index.model is None and embed_queries will load a fresh one.
     with console.status(f"[bold blue]Embedding {len(corpus.queries):,} queries..."):
         t0 = time.time()
-        query_embeddings = embed_queries(corpus.queries, config)
+        query_embeddings = embed_queries(corpus.queries, config, model=dense_index.model)
     console.print(
         f"[green]✓[/green] Embedded {len(corpus.queries):,} queries ({time.time() - t0:.1f}s)"
     )

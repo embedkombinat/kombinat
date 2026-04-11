@@ -141,7 +141,7 @@ For splits beyond what fits comfortably in memory:
 ```
 kombinat/tools/ingest/
 ├── __init__.py
-├── __main__.py          # CLI entry: python -m kombinat.tools.ingest
+├── __main__.py          # CLI entry: uv run python -m kombinat.tools.ingest
 ├── config.py            # IngestConfig (Pydantic)
 ├── source.py            # load dataset from HuggingFace, deduplicate
 ├── bm25.py              # BM25 index build + query
@@ -431,10 +431,10 @@ async def write_pairs(
 CLI entry point.
 
 Usage:
-    python -m kombinat.tools.ingest --split squad
-    python -m kombinat.tools.ingest --split squad --max-docs 1000 --dry-run
-    python -m kombinat.tools.ingest --split paq --bm25-top-k 10000 --dense-top-k 10000
-    python -m kombinat.tools.ingest --split paq --embedding-model all-mpnet-base-v2
+    uv run python -m kombinat.tools.ingest --split squad
+    uv run python -m kombinat.tools.ingest --split squad --max-docs 1000 --dry-run
+    uv run python -m kombinat.tools.ingest --split paq --bm25-top-k 10000 --dense-top-k 10000
+    uv run python -m kombinat.tools.ingest --split paq --embedding-model all-mpnet-base-v2
 """
 import argparse
 import asyncio
@@ -770,8 +770,8 @@ psql postgresql://kombinat:kombinat@localhost:5432/kombinat -c "\dt"
 # → contributors, pairs, batches, batch_pairs, annotations, honeypots
 
 # Run ingest against local DB
-python -m kombinat.tools.ingest --split squad --dry-run
-python -m kombinat.tools.ingest --split squad  # real write
+uv run python -m kombinat.tools.ingest --split squad --dry-run
+uv run python -m kombinat.tools.ingest --split squad  # real write
 ```
 
 ### When you're ready for production
@@ -788,7 +788,7 @@ You don't migrate data from local to remote. The pipeline is deterministic — s
 DATABASE_URL="postgresql://postgres:xxx@db.abc123.supabase.co:5432/postgres" dbmate up
 
 # Re-run ingest against remote (identical output, deterministic UUIDs)
-python -m kombinat.tools.ingest \
+uv run python -m kombinat.tools.ingest \
     --split squad \
     --database-url "postgresql://postgres:xxx@db.abc123.supabase.co:5432/postgres"
 ```
@@ -803,7 +803,7 @@ The local Postgres is throwaway. You can `docker compose down -v` at any time. T
 
 ```bash
 # Squad is the smallest split (25K rows) — perfect for verifying the pipeline
-python -m kombinat.tools.ingest \
+uv run python -m kombinat.tools.ingest \
     --split squad \
     --max-docs 1000 \
     --candidates-per-query 100 \
@@ -814,25 +814,25 @@ python -m kombinat.tools.ingest \
 
 ```bash
 # Full squad split — small enough to finish in minutes
-python -m kombinat.tools.ingest --split squad
+uv run python -m kombinat.tools.ingest --split squad
 ```
 
 This produces ~125M candidate pairs at default settings (25K queries × 5K candidates). If that's too many for a first run, dial it back:
 
 ```bash
-python -m kombinat.tools.ingest --split squad --candidates-per-query 500
+uv run python -m kombinat.tools.ingest --split squad --candidates-per-query 500
 ```
 
 ### Swapping the embedding model
 
 ```bash
 # Use a larger model if you want better retrieval quality
-python -m kombinat.tools.ingest \
+uv run python -m kombinat.tools.ingest \
     --split squad \
     --embedding-model all-mpnet-base-v2
 
 # Or a multilingual model
-python -m kombinat.tools.ingest \
+uv run python -m kombinat.tools.ingest \
     --split squad \
     --embedding-model paraphrase-multilingual-MiniLM-L12-v2
 ```
