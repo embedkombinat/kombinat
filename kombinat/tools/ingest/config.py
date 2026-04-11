@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class IngestConfig(BaseModel):
+class IngestConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     # Source
     dataset_name: str = "nomic-ai/nomic-embed-unsupervised-data"
     split: str = "squad"
