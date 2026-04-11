@@ -41,10 +41,12 @@ FAKE_PAIR = CandidatePair(
 
 def _run_cli(argv: list[str]) -> None:
     """Run the CLI entry point with given argv."""
+    import asyncio
+
     with patch.object(sys, "argv", ["kombinat.tools.ingest"] + argv):
         from kombinat.tools.ingest.__main__ import main
 
-        main()
+        asyncio.run(main())
 
 
 def _mock_pipeline(dry_run: bool = False) -> tuple[MagicMock, MagicMock, MagicMock, AsyncMock]:

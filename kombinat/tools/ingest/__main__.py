@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import time
 
 import asyncpg
@@ -60,7 +59,7 @@ async def main() -> None:
 
     args = parser.parse_args()
 
-    config = IngestConfig(
+    overrides: dict[str, object] = dict(
         split=args.split,
         max_docs=args.max_docs,
         bm25_top_k=args.bm25_top_k,
@@ -72,8 +71,10 @@ async def main() -> None:
         embedding_batch_size=args.embedding_batch_size,
         faiss_index_dir=args.faiss_index_dir,
         faiss_min_search_docs=args.faiss_min_search_docs,
-        database_url=args.database_url or os.environ.get("DATABASE_URL", ""),
     )
+    if args.database_url:
+        overrides["database_url"] = args.database_url
+    config = IngestConfig(**overrides)
 
     # ── Header ──
     console.print()

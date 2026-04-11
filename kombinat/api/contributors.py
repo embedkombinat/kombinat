@@ -49,7 +49,8 @@ async def auth_github(
         github_username,
         github_avatar_url,
     )
-    assert row is not None
+    if row is None:
+        raise HTTPException(status_code=500, detail="Failed to upsert contributor")
 
     settings = get_settings()
     token = create_jwt(str(row["id"]), github_id)
