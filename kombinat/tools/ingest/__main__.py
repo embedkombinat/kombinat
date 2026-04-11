@@ -9,6 +9,7 @@ Usage (run with uv from the kombinat/ project root):
 
 Requires the `ingest` extras: `uv sync --extra ingest`.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -40,33 +41,77 @@ console = Console()
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest dataset into kombinat")
 
-    # Required
-    parser.add_argument("--split", required=True, help="Dataset split to process (e.g. squad, paq, wikipedia)")
+    parser.add_argument(
+        "--split",
+        required=True,
+        help="Dataset split to process (e.g. squad, paq, wikipedia)",
+    )
 
-    # Retrieval tuning
-    parser.add_argument("--bm25-top-k", type=int, default=10_000, help="BM25 retrieval depth (default: 10000)")
-    parser.add_argument("--dense-top-k", type=int, default=10_000, help="Dense retrieval depth (default: 10000)")
-    parser.add_argument("--candidates-per-query", type=int, default=5_000, help="Final candidates after RRF (default: 5000)")
-    parser.add_argument("--rrf-k", type=int, default=60, help="RRF constant (default: 60)")
+    parser.add_argument(
+        "--bm25-top-k",
+        type=int,
+        default=10_000,
+        help="BM25 retrieval depth (default: 10000)",
+    )
+    parser.add_argument(
+        "--dense-top-k",
+        type=int,
+        default=10_000,
+        help="Dense retrieval depth (default: 10000)",
+    )
+    parser.add_argument(
+        "--candidates-per-query",
+        type=int,
+        default=5_000,
+        help="Final candidates after RRF (default: 5000)",
+    )
+    parser.add_argument(
+        "--rrf-k",
+        type=int,
+        default=60,
+        help="RRF constant (default: 60)",
+    )
 
-    # Embedding model
-    parser.add_argument("--embedding-model", default="all-MiniLM-L6-v2", help="HuggingFace model ID for dense retrieval")
-    parser.add_argument("--embedding-device", default="mps", choices=["mps", "cuda", "cpu"])
+    parser.add_argument(
+        "--embedding-model",
+        default="all-MiniLM-L6-v2",
+        help="HuggingFace model ID for dense retrieval",
+    )
+    parser.add_argument(
+        "--embedding-device",
+        default="mps",
+        choices=["mps", "cuda", "cpu"],
+    )
     parser.add_argument("--embedding-batch-size", type=int, default=256)
 
-    # Limits and modes
-    parser.add_argument("--max-docs", type=int, default=None, help="Limit corpus size (dev mode)")
-    parser.add_argument("--dry-run", action="store_true", help="Build index + retrieve, don't write to DB")
+    parser.add_argument(
+        "--max-docs",
+        type=int,
+        default=None,
+        help="Limit corpus size (dev mode)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build index + retrieve, don't write to DB",
+    )
 
-    # Infrastructure
-    parser.add_argument("--database-url", default=None, help="Override DATABASE_URL env var")
+    parser.add_argument(
+        "--database-url",
+        default=None,
+        help="Override DATABASE_URL env var",
+    )
     parser.add_argument("--faiss-index-dir", default="~/.kombinat/faiss_indexes")
-    parser.add_argument("--faiss-min-search-docs", type=int, default=100_000,
-                        help="Min docs to search in FAISS (controls nprobe). Small corpora get brute force.")
+    parser.add_argument(
+        "--faiss-min-search-docs",
+        type=int,
+        default=100_000,
+        help="Min docs to search in FAISS (controls nprobe). Small corpora get brute force.",
+    )
 
     args = parser.parse_args()
 
-    overrides: dict[str, object] = dict(
+    config = IngestConfig(
         split=args.split,
         max_docs=args.max_docs,
         bm25_top_k=args.bm25_top_k,
@@ -80,16 +125,17 @@ async def main() -> None:
         faiss_min_search_docs=args.faiss_min_search_docs,
     )
     if args.database_url:
-        overrides["database_url"] = args.database_url
-    config = IngestConfig(**overrides)
+        config.database_url = args.database_url
 
     # ── Header ──
     console.print()
-    console.print(Panel(
-        f"[bold]kombinat ingest[/bold] · {config.source_dataset_label}",
-        subtitle="hard negative candidate mining",
-        style="blue",
-    ))
+    console.print(
+        Panel(
+            f"[bold]kombinat ingest[/bold] · {config.source_dataset_label}",
+            subtitle="hard negative candidate mining",
+            style="blue",
+        )
+    )
 
     # ── Run summary ──
     summary = Table(show_header=False, box=None, padding=(0, 2))
@@ -127,7 +173,8 @@ async def main() -> None:
         t0 = time.time()
         bm25_index = build_bm25_index(corpus)
     console.print(
-        f"[green]✓[/green] BM25 index built over {len(corpus.doc_texts):,} docs ({time.time() - t0:.1f}s)"
+        f"[green]✓[/green] BM25 index built over {len(corpus.doc_texts):,} docs "
+        f"({time.time() - t0:.1f}s)"
     )
 
     # ── 3. Build dense index ──
@@ -176,7 +223,7 @@ async def main() -> None:
                 pairs=0,
             )
             for i, (query, pos_doc_id) in enumerate(
-                zip(corpus.queries, corpus.positive_doc_ids)
+                zip(corpus.queries, corpus.positive_doc_ids, strict=True)
             ):
                 bm25_hits = bm25_retrieve(bm25_index, query, config.bm25_top_k)
                 dense_hits = dense_retrieve(dense_index, query_embeddings[i], config.dense_top_k)
@@ -208,10 +255,12 @@ async def main() -> None:
     console.print()
 
     console.print()
-    console.print(Panel(
-        f"[bold green]Done.[/bold green] {total_pairs:,} candidate pairs from {config.split}",
-        style="green",
-    ))
+    console.print(
+        Panel(
+            f"[bold green]Done.[/bold green] {total_pairs:,} candidate pairs from {config.split}",
+            style="green",
+        )
+    )
 
 
 if __name__ == "__main__":

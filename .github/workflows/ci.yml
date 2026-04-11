@@ -62,4 +62,14 @@ jobs:
           GITHUB_CLIENT_ID: test
           GITHUB_CLIENT_SECRET: test
           JWT_SECRET: deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef
-        run: uv run pytest -v --tb=short
+        # Deselect `slow` tests (real HuggingFace model downloads) — they add
+        # network flakiness and minutes of runtime for a smoke check. Developers
+        # run them locally with `uv run pytest -v` (no marker filter).
+        run: uv run pytest -v --tb=short -m "not slow"
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml-kombinat
+          path: coverage.xml

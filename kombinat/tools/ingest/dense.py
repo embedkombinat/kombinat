@@ -2,19 +2,22 @@ from __future__ import annotations
 
 import json
 import pathlib
-from dataclasses import dataclass
 from math import sqrt
+from typing import TYPE_CHECKING, Any
 
 import faiss  # type: ignore[import-untyped]
 import numpy as np
-from sentence_transformers import SentenceTransformer  # type: ignore[import-untyped]
+from pydantic import BaseModel, ConfigDict
+from sentence_transformers import SentenceTransformer
 
-from kombinat.tools.ingest.config import IngestConfig
-from kombinat.tools.ingest.source import Corpus
+if TYPE_CHECKING:
+    from kombinat.tools.ingest.config import IngestConfig
+    from kombinat.tools.ingest.source import Corpus
 
 
-@dataclass
-class DenseIndex:
+class DenseIndex(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     index: faiss.Index
     doc_ids: list[str]
     dimension: int
@@ -22,7 +25,9 @@ class DenseIndex:
     # Model used to build the index. None when the index was loaded from disk cache,
     # in which case embed_queries() will load its own. Exposed so callers can reuse
     # the freshly-loaded model for query embedding and avoid a second model load.
-    model: SentenceTransformer | None = None
+    # Typed as Any because tests substitute SentenceTransformer with a MagicMock, which
+    # would fail pydantic's isinstance check; the real type contract lives on embed_queries().
+    model: Any = None
 
 
 def compute_nprobe(n_docs: int, nlist: int, min_search_docs: int = 100_000) -> int:
@@ -68,9 +73,8 @@ def build_dense_index(corpus: Corpus, config: IngestConfig) -> DenseIndex:
         return DenseIndex(index=index, doc_ids=doc_ids, dimension=dim, nlist=nlist)
 
     model = SentenceTransformer(config.embedding_model, device=config.embedding_device)
-    dim: int = model.get_sentence_embedding_dimension()
+    dim = model.get_sentence_embedding_dimension()
 
-    # Encode all documents in batches
     vectors: np.ndarray = model.encode(
         corpus.doc_texts,
         batch_size=config.embedding_batch_size,
@@ -93,7 +97,13 @@ def build_dense_index(corpus: Corpus, config: IngestConfig) -> DenseIndex:
     faiss.write_index(index, str(idx_path))
     ids_path.write_text(json.dumps(corpus.doc_ids))
 
-    return DenseIndex(index=index, doc_ids=corpus.doc_ids, dimension=dim, nlist=nlist, model=model)
+    return DenseIndex(
+        index=index,
+        doc_ids=corpus.doc_ids,
+        dimension=dim,
+        nlist=nlist,
+        model=model,
+    )
 
 
 def dense_retrieve(
@@ -106,7 +116,7 @@ def dense_retrieve(
     n_results = min(top_k, len(index.doc_ids))
     scores, indices = index.index.search(vec, n_results)
     results: list[tuple[str, float]] = []
-    for idx, score in zip(indices[0], scores[0]):
+    for idx, score in zip(indices[0], scores[0], strict=False):
         if idx >= 0:
             results.append((index.doc_ids[idx], float(score)))
     return results

@@ -7,7 +7,7 @@ import pytest
 
 from kombinat.tools.ingest.config import IngestConfig
 from kombinat.tools.ingest.fusion import RankedCandidate
-from kombinat.tools.ingest.pairs import CandidatePair, build_candidates
+from kombinat.tools.ingest.pairs import build_candidates
 from kombinat.tools.ingest.source import Corpus
 
 
@@ -42,9 +42,7 @@ def _rrf_results(corpus: Corpus) -> list[RankedCandidate]:
     ]
 
 
-def test_build_candidates_excludes_positive(
-    small_corpus: Corpus, config: IngestConfig
-) -> None:
+def test_build_candidates_excludes_positive(small_corpus: Corpus, config: IngestConfig) -> None:
     rrf = _rrf_results(small_corpus)
     pos_id = small_corpus.positive_doc_ids[0]
     candidates = build_candidates("query one", pos_id, rrf, small_corpus, config)
@@ -55,13 +53,13 @@ def test_build_candidates_max_candidates_per_query(
     small_corpus: Corpus, config: IngestConfig
 ) -> None:
     rrf = _rrf_results(small_corpus)
-    candidates = build_candidates("query one", small_corpus.positive_doc_ids[0], rrf, small_corpus, config)
+    candidates = build_candidates(
+        "query one", small_corpus.positive_doc_ids[0], rrf, small_corpus, config
+    )
     assert len(candidates) <= config.candidates_per_query
 
 
-def test_build_candidates_deterministic_uuids(
-    small_corpus: Corpus, config: IngestConfig
-) -> None:
+def test_build_candidates_deterministic_uuids(small_corpus: Corpus, config: IngestConfig) -> None:
     rrf = _rrf_results(small_corpus)
     pos_id = small_corpus.positive_doc_ids[0]
     run1 = build_candidates("query one", pos_id, rrf, small_corpus, config)
@@ -81,7 +79,9 @@ def test_build_candidates_uuid_formula(small_corpus: Corpus, config: IngestConfi
 
 def test_build_candidates_retrieval_method(small_corpus: Corpus, config: IngestConfig) -> None:
     rrf = _rrf_results(small_corpus)
-    candidates = build_candidates("query one", small_corpus.positive_doc_ids[0], rrf, small_corpus, config)
+    candidates = build_candidates(
+        "query one", small_corpus.positive_doc_ids[0], rrf, small_corpus, config
+    )
     assert all(c.retrieval_method == "bm25+dense" for c in candidates)
 
 
@@ -90,7 +90,7 @@ def test_build_candidates_source_rank(small_corpus: Corpus, config: IngestConfig
     pos_id = small_corpus.positive_doc_ids[0]
     candidates = build_candidates("query one", pos_id, rrf, small_corpus, config)
     # source_rank should reflect position in rrf_results (skipping positive)
-    for i, c in enumerate(candidates):
+    for c in candidates:
         assert c.source_rank >= 1
 
 
@@ -98,7 +98,9 @@ def test_build_candidates_source_dataset_full_path(
     small_corpus: Corpus, config: IngestConfig
 ) -> None:
     rrf = _rrf_results(small_corpus)
-    candidates = build_candidates("query one", small_corpus.positive_doc_ids[0], rrf, small_corpus, config)
+    candidates = build_candidates(
+        "query one", small_corpus.positive_doc_ids[0], rrf, small_corpus, config
+    )
     expected = "nomic-ai/nomic-embed-unsupervised-data/squad"
     assert all(c.source_dataset == expected for c in candidates)
 

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from uuid import NAMESPACE_URL, uuid5
 
-from kombinat.tools.ingest.config import IngestConfig
-from kombinat.tools.ingest.fusion import RankedCandidate
-from kombinat.tools.ingest.source import Corpus
+from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from kombinat.tools.ingest.config import IngestConfig
+    from kombinat.tools.ingest.fusion import RankedCandidate
+    from kombinat.tools.ingest.source import Corpus
 
 
-@dataclass
-class CandidatePair:
+class CandidatePair(BaseModel):
     pair_id: str
     query_text: str
     doc_id: str

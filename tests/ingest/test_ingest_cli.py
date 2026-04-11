@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import sys
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from kombinat.tools.ingest.config import IngestConfig
-from kombinat.tools.ingest.fusion import RankedCandidate
 from kombinat.tools.ingest.pairs import CandidatePair
 from kombinat.tools.ingest.source import Corpus
+
+if TYPE_CHECKING:
+    from kombinat.tools.ingest.config import IngestConfig
 
 
 def _sha(text: str) -> str:
@@ -47,20 +49,6 @@ def _run_cli(argv: list[str]) -> None:
         from kombinat.tools.ingest.__main__ import main
 
         asyncio.run(main())
-
-
-def _mock_pipeline(dry_run: bool = False) -> tuple[MagicMock, MagicMock, MagicMock, AsyncMock]:
-    """Return mocks for the four main pipeline functions."""
-    mock_load = MagicMock(return_value=FAKE_CORPUS)
-    mock_bm25_build = MagicMock(return_value=MagicMock())
-    mock_bm25_retrieve = MagicMock(return_value=[])
-    mock_dense_build = MagicMock(return_value=MagicMock(nlist=1))
-    mock_dense_retrieve = MagicMock(return_value=[])
-    mock_embed = MagicMock(return_value=__import__("numpy").zeros((2, 8)))
-    mock_rrf = MagicMock(return_value=[])
-    mock_build_candidates = MagicMock(return_value=[FAKE_PAIR])
-    mock_write = AsyncMock(return_value=1)
-    return mock_load, mock_dense_build, mock_build_candidates, mock_write
 
 
 def test_cli_missing_split_exits() -> None:
@@ -188,13 +176,19 @@ def test_cli_retrieval_params_flow_through() -> None:
         patch("kombinat.tools.ingest.__main__.rrf_fuse", mock_rrf),
         patch("kombinat.tools.ingest.__main__.build_candidates", mock_candidates),
     ):
-        _run_cli([
-            "--split", "squad",
-            "--bm25-top-k", "500",
-            "--dense-top-k", "300",
-            "--candidates-per-query", "50",
-            "--dry-run",
-        ])
+        _run_cli(
+            [
+                "--split",
+                "squad",
+                "--bm25-top-k",
+                "500",
+                "--dense-top-k",
+                "300",
+                "--candidates-per-query",
+                "50",
+                "--dry-run",
+            ]
+        )
 
     cfg = captured_config[0]
     assert cfg.bm25_top_k == 500

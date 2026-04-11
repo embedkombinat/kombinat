@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-import numpy as np
+from pydantic import BaseModel, ConfigDict
 from rank_bm25 import BM25Okapi  # type: ignore[import-untyped]
 
-from kombinat.tools.ingest.source import Corpus
+if TYPE_CHECKING:
+    import numpy as np
+
+    from kombinat.tools.ingest.source import Corpus
 
 
-@dataclass
-class BM25Index:
+class BM25Index(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     index: BM25Okapi
     doc_ids: list[str]
 

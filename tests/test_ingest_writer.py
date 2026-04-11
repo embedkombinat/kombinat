@@ -40,7 +40,9 @@ async def test_write_pairs_inserts_rows(db_pool: asyncpg.Pool) -> None:
     count = await write_pairs(pairs, TEST_DSN, batch_size=10)
     assert count == 5
 
-    rows = await db_pool.fetch("SELECT * FROM pairs WHERE source_dataset = $1", pairs[0].source_dataset)
+    rows = await db_pool.fetch(
+        "SELECT * FROM pairs WHERE source_dataset = $1", pairs[0].source_dataset
+    )
     assert len(rows) == 5
 
 
@@ -113,5 +115,7 @@ async def test_write_batch_inserts_using_existing_conn(db_pool: asyncpg.Pool) ->
         await conn.close()
 
     assert count == 3
-    rows = await db_pool.fetch("SELECT id FROM pairs WHERE source_dataset = $1", pairs[0].source_dataset)
+    rows = await db_pool.fetch(
+        "SELECT id FROM pairs WHERE source_dataset = $1", pairs[0].source_dataset
+    )
     assert len(rows) == 3

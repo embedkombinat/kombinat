@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from datasets import load_dataset  # type: ignore[import-untyped]
+from pydantic import BaseModel, Field
 
-from kombinat.tools.ingest.config import IngestConfig
+if TYPE_CHECKING:
+    from kombinat.tools.ingest.config import IngestConfig
 
 
-@dataclass
-class Corpus:
+class Corpus(BaseModel):
     """Deduplicated document corpus from one split."""
 
     doc_ids: list[str]
@@ -17,7 +18,7 @@ class Corpus:
     queries: list[str]
     positive_doc_ids: list[str]
     split: str
-    doc_id_to_idx: dict[str, int] = field(default_factory=dict)
+    doc_id_to_idx: dict[str, int] = Field(default_factory=dict)
 
 
 def _doc_id(text: str) -> str:
@@ -32,9 +33,8 @@ def load_split(config: IngestConfig) -> Corpus:
     """
     dataset = load_dataset(config.dataset_name, split=config.split, streaming=True)
 
-    # Build unique document corpus
     doc_id_to_text: dict[str, str] = {}
-    doc_id_order: list[str] = []  # insertion order
+    doc_id_order: list[str] = []
 
     queries: list[str] = []
     positive_doc_ids: list[str] = []
@@ -52,7 +52,7 @@ def load_split(config: IngestConfig) -> Corpus:
         positive_doc_ids.append(did)
 
         if config.max_docs is not None and len(queries) >= config.max_docs:
-            break  # stop after max_docs rows total
+            break
 
     doc_ids = doc_id_order
     doc_texts = [doc_id_to_text[did] for did in doc_ids]

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import pathlib
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -16,10 +14,11 @@ from kombinat.tools.ingest.dense import (
     dense_retrieve,
     embed_queries,
 )
-from kombinat.tools.ingest.source import Corpus
 
 if TYPE_CHECKING:
-    pass
+    import pathlib
+
+    from kombinat.tools.ingest.source import Corpus
 
 DIM = 8  # tiny dimension for fast unit tests
 
@@ -121,9 +120,7 @@ def test_build_dense_index_loads_from_disk_on_rerun(
 # ── dense_retrieve ──────────────────────────────────────────────────────────
 
 
-def test_dense_retrieve_returns_top_k(
-    tiny_corpus: Corpus, ingest_config: IngestConfig
-) -> None:
+def test_dense_retrieve_returns_top_k(tiny_corpus: Corpus, ingest_config: IngestConfig) -> None:
     mock_enc = _mock_encoder()
     with patch("kombinat.tools.ingest.dense.SentenceTransformer", return_value=mock_enc):
         index = build_dense_index(tiny_corpus, ingest_config)
@@ -134,9 +131,7 @@ def test_dense_retrieve_returns_top_k(
     assert len(results) == 3
 
 
-def test_dense_retrieve_doc_ids_in_corpus(
-    tiny_corpus: Corpus, ingest_config: IngestConfig
-) -> None:
+def test_dense_retrieve_doc_ids_in_corpus(tiny_corpus: Corpus, ingest_config: IngestConfig) -> None:
     mock_enc = _mock_encoder()
     with patch("kombinat.tools.ingest.dense.SentenceTransformer", return_value=mock_enc):
         index = build_dense_index(tiny_corpus, ingest_config)
@@ -179,8 +174,8 @@ def test_build_dense_index_real_model_paris_in_top3(
     index = build_dense_index(tiny_corpus, real_config)
     query_vecs = embed_queries(["What is the capital of France?"], real_config)
     results = dense_retrieve(index, query_vecs[0], top_k=3)
-    paris_id = hashlib.sha256(
-        "Paris is the capital of France and its largest city.".encode()
-    ).hexdigest()[:16]
+    paris_id = hashlib.sha256(b"Paris is the capital of France and its largest city.").hexdigest()[
+        :16
+    ]
     doc_ids = [did for did, _ in results]
     assert paris_id in doc_ids

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from pydantic import BaseModel
 
 
-@dataclass
-class RankedCandidate:
+class RankedCandidate(BaseModel):
     doc_id: str
     rrf_score: float
     bm25_rank: int | None

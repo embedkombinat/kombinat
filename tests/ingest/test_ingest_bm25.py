@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-import pytest
+from typing import TYPE_CHECKING
 
 from kombinat.tools.ingest.bm25 import BM25Index, bm25_retrieve, build_bm25_index
-from kombinat.tools.ingest.source import Corpus
+
+if TYPE_CHECKING:
+    from kombinat.tools.ingest.source import Corpus
 
 
 def test_build_bm25_index_returns_bm25_index(tiny_corpus: Corpus) -> None:
@@ -18,7 +20,8 @@ def test_bm25_retrieve_returns_paris_in_top3(tiny_corpus: Corpus) -> None:
     # Paris doc should be in top-3
     import hashlib
 
-    paris_id = hashlib.sha256("Paris is the capital of France and its largest city.".encode()).hexdigest()[:16]
+    paris_doc = b"Paris is the capital of France and its largest city."
+    paris_id = hashlib.sha256(paris_doc).hexdigest()[:16]
     assert paris_id in doc_ids
 
 

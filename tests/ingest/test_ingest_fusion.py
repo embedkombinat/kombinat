@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from kombinat.tools.ingest.fusion import RankedCandidate, rrf_fuse
 
 
@@ -16,7 +14,7 @@ def test_rrf_fuse_identical_rankings_doubles_scores() -> None:
     ranking = [("doc_a", 1.0), ("doc_b", 0.8)]
     single = rrf_fuse(ranking, [], k=60)
     double = rrf_fuse(ranking, ranking, k=60)
-    for s, d in zip(single, double):
+    for s, d in zip(single, double, strict=True):
         assert abs(d.rrf_score - 2 * s.rrf_score) < 1e-9
 
 

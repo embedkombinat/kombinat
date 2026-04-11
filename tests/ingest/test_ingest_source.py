@@ -11,7 +11,10 @@ from kombinat.tools.ingest.source import Corpus, load_split
 def _make_hf_rows(docs: list[str], queries: list[str]) -> list[dict[str, str]]:
     """Simulate HuggingFace dataset rows."""
     assert len(docs) == len(queries)
-    return [{"query": q, "document": d, "dataset": "squad", "shard": 0} for q, d in zip(queries, docs)]
+    return [
+        {"query": q, "document": d, "dataset": "squad", "shard": 0}
+        for q, d in zip(queries, docs, strict=True)
+    ]
 
 
 @pytest.fixture

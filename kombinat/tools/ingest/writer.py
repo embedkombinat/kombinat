@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import asyncpg
 
-from kombinat.tools.ingest.pairs import CandidatePair
+if TYPE_CHECKING:
+    from kombinat.tools.ingest.pairs import CandidatePair
 
 _INSERT_SQL = """
     INSERT INTO pairs (id, query_text, doc_id, doc_text,
@@ -13,8 +16,16 @@ _INSERT_SQL = """
 """
 
 
-def _row(p: CandidatePair) -> tuple:
-    return (p.pair_id, p.query_text, p.doc_id, p.doc_text, p.source_dataset, p.retrieval_method, p.source_rank)
+def _row(p: CandidatePair) -> tuple[str, str, str, str, str, str, int]:
+    return (
+        p.pair_id,
+        p.query_text,
+        p.doc_id,
+        p.doc_text,
+        p.source_dataset,
+        p.retrieval_method,
+        p.source_rank,
+    )
 
 
 async def write_batch(conn: asyncpg.Connection, pairs: list[CandidatePair]) -> int:
