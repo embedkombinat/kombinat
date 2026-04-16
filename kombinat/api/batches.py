@@ -189,13 +189,22 @@ async def delete_batch(
     """Release a batch early, returning pairs to the available pool."""
     row = await db.fetchrow("SELECT * FROM batches WHERE id = $1", batch_id)
     if row is None:
-        raise HTTPException(status_code=404, detail="Batch not found")
+        raise HTTPException(status_code=404, detail=f"Batch {batch_id} not found")
 
     if row["contributor_id"] != contributor["id"]:
-        raise HTTPException(status_code=403, detail="Not the batch owner")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Batch {batch_id} is owned by another contributor",
+        )
 
     if row["status"] != "assigned":
-        raise HTTPException(status_code=400, detail="Batch not in assigned status")
+        # Already released or completed — treat as success (idempotent)
+        if row["status"] in ("expired", "completed"):
+            return Response(status_code=204)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Batch {batch_id} is in '{row['status']}' status, expected 'assigned'",
+        )
 
     await db.execute("UPDATE batches SET status = 'expired' WHERE id = $1", batch_id)
     return Response(status_code=204)

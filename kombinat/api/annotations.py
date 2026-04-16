@@ -15,6 +15,8 @@ from kombinat.validator.reputation import update_reputation
 if TYPE_CHECKING:
     import uuid
 
+    from asyncpg import Pool
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["annotations"])
@@ -41,11 +43,45 @@ async def submit_annotations(
     # Validate batch
     batch = await db.fetchrow("SELECT * FROM batches WHERE id = $1", body.batch_id)
     if batch is None:
-        raise HTTPException(status_code=404, detail="Batch not found")
+        logger.warning(
+            "Batch not found: batch_id=%s contributor_id=%s", body.batch_id, contributor_id
+        )
+        raise HTTPException(status_code=404, detail=f"Batch {body.batch_id} not found")
     if batch["contributor_id"] != contributor_id:
-        raise HTTPException(status_code=403, detail="Not the batch owner")
+        logger.warning(
+            "Batch owner mismatch: batch_id=%s batch_owner=%s request_contributor=%s",
+            body.batch_id,
+            batch["contributor_id"],
+            contributor_id,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=f"Batch {body.batch_id} is owned by another contributor",
+        )
     if batch["status"] != "assigned":
-        raise HTTPException(status_code=400, detail="Batch not in assigned status")
+        # Idempotent retry: if the batch is already completed by this contributor,
+        # return the result from the existing annotations instead of erroring.
+        if batch["status"] == "completed":
+            logger.info(
+                "Idempotent retry: batch %s already completed by contributor %s",
+                body.batch_id,
+                contributor_id,
+            )
+            return await _build_result_from_existing(db, body.batch_id, contributor_id)
+
+        logger.warning(
+            "Batch status invalid for submission: batch_id=%s status=%s contributor_id=%s",
+            body.batch_id,
+            batch["status"],
+            contributor_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Batch {body.batch_id} is in '{batch['status']}' status, expected 'assigned'. "
+                f"This batch may have expired (24h TTL) before annotations were submitted."
+            ),
+        )
 
     # Get valid pair_ids for this batch
     batch_pair_rows = await db.fetch(
@@ -161,5 +197,54 @@ async def submit_annotations(
         contributor_tokens={
             "input_tokens": updated["total_input_tokens"],
             "output_tokens": updated["total_output_tokens"],
+        },
+    )
+
+
+async def _build_result_from_existing(
+    db: Pool, batch_id: uuid.UUID, contributor_id: uuid.UUID
+) -> AnnotationResult:
+    """Reconstruct an AnnotationResult from already-persisted annotations (idempotent retry)."""
+    row = await db.fetchrow(
+        """SELECT COUNT(*) AS accepted,
+                  COALESCE(SUM(input_tokens), 0) AS total_input,
+                  COALESCE(SUM(output_tokens), 0) AS total_output
+           FROM annotations
+           WHERE batch_id = $1 AND contributor_id = $2""",
+        batch_id,
+        contributor_id,
+    )
+    accepted = row["accepted"] if row else 0
+
+    # Honeypot accuracy from existing annotations
+    hp_rows = await db.fetch(
+        """SELECT a.label, h.pair_id
+           FROM annotations a
+           JOIN honeypots h ON h.pair_id = a.pair_id
+           WHERE a.batch_id = $1 AND a.contributor_id = $2""",
+        batch_id,
+        contributor_id,
+    )
+    honeypot_accuracy: float | None = None
+    if hp_rows:
+        # Re-check honeypots the same way the original submission did
+        from kombinat.validator.checks import honeypot_check
+
+        results = [await honeypot_check(db, r["pair_id"], r["label"]) for r in hp_rows]
+        honeypot_accuracy = sum(results) / len(results)
+
+    updated = await db.fetchrow(
+        "SELECT total_input_tokens, total_output_tokens FROM contributors WHERE id = $1",
+        contributor_id,
+    )
+
+    return AnnotationResult(
+        accepted=accepted,
+        rejected=0,
+        honeypot_accuracy=honeypot_accuracy,
+        pairs_verified=0,
+        contributor_tokens={
+            "input_tokens": updated["total_input_tokens"] if updated else 0,
+            "output_tokens": updated["total_output_tokens"] if updated else 0,
         },
     )
