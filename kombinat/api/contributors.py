@@ -7,12 +7,29 @@ from fastapi import APIRouter, Depends, HTTPException
 from kombinat.auth import create_jwt, exchange_github_code
 from kombinat.config import get_settings
 from kombinat.dependencies import get_current_contributor, get_db
-from kombinat.schemas.contributors import AuthRequest, AuthResponse, ContributorOut
+from kombinat.schemas.contributors import (
+    AuthConfigResponse,
+    AuthRequest,
+    AuthResponse,
+    ContributorOut,
+)
 
 if TYPE_CHECKING:
     import asyncpg
 
 router = APIRouter(tags=["auth"])
+
+
+@router.get(
+    "/auth/config",
+    response_model=AuthConfigResponse,
+    status_code=200,
+    summary="Public OAuth client configuration",
+)
+async def auth_config() -> AuthConfigResponse:
+    """Return the public GitHub OAuth client_id so clients don't need to hardcode it."""
+    settings = get_settings()
+    return AuthConfigResponse(client_id=settings.github_client_id)
 
 
 @router.post(

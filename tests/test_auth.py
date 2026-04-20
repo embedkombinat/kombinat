@@ -41,6 +41,14 @@ async def _mock_github_exchange(
     return mock_cm
 
 
+async def test_auth_config_returns_client_id(client: AsyncClient) -> None:
+    """GET /v1/auth/config returns the server's configured GitHub client_id."""
+    settings = get_settings()
+    resp = await client.get("/v1/auth/config")
+    assert resp.status_code == 200
+    assert resp.json() == {"client_id": settings.github_client_id}
+
+
 async def test_auth_github_valid_code(client: AsyncClient, db_pool: asyncpg.Pool) -> None:
     """POST /v1/auth/github with valid code returns contributor + JWT."""
     mock_cm = await _mock_github_exchange()

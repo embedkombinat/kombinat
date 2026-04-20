@@ -25,3 +25,7 @@ class AuthResponse(BaseModel):
     access_token: str
     expires_in: int
     contributor: ContributorOut
+
+
+class AuthConfigResponse(BaseModel):
+    client_id: str
