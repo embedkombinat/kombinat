@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Depends, HTTPException
 
 from kombinat.dependencies import get_db
-from kombinat.schemas.stats import StatsOut
+from kombinat.schemas.stats import LeaderboardEntry, LeaderboardOut, StatsOut
 
 if TYPE_CHECKING:
     import asyncpg
@@ -74,3 +74,25 @@ async def get_stats(
         total_input_tokens=token_totals["input_tokens"],
         total_output_tokens=token_totals["output_tokens"],
     )
+
+
+@router.get(
+    "/stats/leaderboard",
+    response_model=LeaderboardOut,
+    status_code=200,
+    summary="Top contributors by annotation count",
+)
+async def get_leaderboard(
+    db: asyncpg.Pool = Depends(get_db),  # noqa: B008
+    limit: int = 20,
+) -> LeaderboardOut:
+    """Return top contributors ranked by total annotations. No auth required."""
+    rows = await db.fetch(
+        """SELECT github_username, github_avatar_url, total_annotations
+        FROM contributors
+        WHERE total_annotations > 0
+        ORDER BY total_annotations DESC
+        LIMIT $1""",
+        min(limit, 50),
+    )
+    return LeaderboardOut(entries=[LeaderboardEntry(**dict(r)) for r in rows])

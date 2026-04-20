@@ -91,3 +91,97 @@ async def test_stats_active_contributors_24h(
     data = resp.json()
     assert data["active_contributors_24h"] == 1
     assert data["total_contributors"] == 2
+
+
+# ── Leaderboard ──────────────────────────────────────────────────────
+
+
+async def test_leaderboard_returns_top_contributors(
+    client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """GET /v1/stats/leaderboard returns contributors ordered by annotations desc."""
+    for i, count in enumerate([100, 500, 250]):
+        await db_pool.execute(
+            """INSERT INTO contributors
+            (github_id, github_username, github_avatar_url, total_annotations)
+            VALUES ($1, $2, $3, $4)""",
+            2000 + i,
+            f"lb_user_{i}",
+            f"https://avatars.githubusercontent.com/u/{2000 + i}",
+            count,
+        )
+
+    resp = await client.get("/v1/stats/leaderboard")
+    assert resp.status_code == 200
+    entries = resp.json()["entries"]
+    assert len(entries) == 3
+    assert entries[0]["github_username"] == "lb_user_1"  # 500
+    assert entries[0]["total_annotations"] == 500
+    assert entries[1]["total_annotations"] == 250
+    assert entries[2]["total_annotations"] == 100
+    # Avatar URL present
+    assert entries[0]["github_avatar_url"].startswith("https://")
+
+
+async def test_leaderboard_respects_limit(
+    client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """limit query param caps the number of results."""
+    for i in range(5):
+        await db_pool.execute(
+            """INSERT INTO contributors
+            (github_id, github_username, total_annotations)
+            VALUES ($1, $2, $3)""",
+            3000 + i,
+            f"limit_user_{i}",
+            (i + 1) * 10,
+        )
+
+    resp = await client.get("/v1/stats/leaderboard?limit=3")
+    assert resp.status_code == 200
+    assert len(resp.json()["entries"]) == 3
+
+
+async def test_leaderboard_excludes_zero_annotations(
+    client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """Contributors with 0 annotations are excluded."""
+    await db_pool.execute(
+        """INSERT INTO contributors (github_id, github_username, total_annotations)
+        VALUES ($1, $2, $3)""",
+        4000,
+        "zero_user",
+        0,
+    )
+    resp = await client.get("/v1/stats/leaderboard")
+    assert resp.status_code == 200
+    assert len(resp.json()["entries"]) == 0
+
+
+async def test_leaderboard_no_auth_required(client: AsyncClient) -> None:
+    """GET /v1/stats/leaderboard requires no authentication."""
+    resp = await client.get("/v1/stats/leaderboard")
+    assert resp.status_code == 200
+
+
+async def test_leaderboard_limit_capped_at_50(
+    client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """Requesting limit > 50 still returns at most 50."""
+    for i in range(55):
+        await db_pool.execute(
+            """INSERT INTO contributors
+            (github_id, github_username, total_annotations)
+            VALUES ($1, $2, $3)""",
+            5000 + i,
+            f"cap_user_{i}",
+            i + 1,
+        )
+
+    resp = await client.get("/v1/stats/leaderboard?limit=100")
+    assert resp.status_code == 200
+    assert len(resp.json()["entries"]) <= 50

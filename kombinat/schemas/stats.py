@@ -11,3 +11,13 @@ class StatsOut(BaseModel):
     pairs_per_day: int
     total_input_tokens: int
     total_output_tokens: int
+
+
+class LeaderboardEntry(BaseModel):
+    github_username: str
+    github_avatar_url: str | None
+    total_annotations: int
+
+
+class LeaderboardOut(BaseModel):
+    entries: list[LeaderboardEntry]
