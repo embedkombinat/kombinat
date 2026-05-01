@@ -27,6 +27,7 @@ async def _mock_github_exchange(
     mock_client.post.return_value = token_response
 
     user_response = MagicMock()
+    user_response.status_code = 200
     user_response.json.return_value = {
         "id": github_id,
         "login": login,
@@ -179,3 +180,62 @@ async def test_auth_repeat_login_updates_profile(
     assert resp2.status_code == 200
     assert resp2.json()["contributor"]["github_username"] == "user_v2"
     assert resp2.json()["contributor"]["github_avatar_url"] == "https://example.com/v2.png"
+
+
+async def _mock_github_user_lookup(
+    *,
+    status_code: int = 200,
+    github_id: int = 22222,
+    login: str = "deviceuser",
+    avatar_url: str = "https://example.com/device.png",
+) -> AsyncMock:
+    """Mock for httpx.AsyncClient used by `fetch_github_user` (device-flow path)."""
+    mock_client = AsyncMock()
+    user_response = MagicMock()
+    user_response.status_code = status_code
+    user_response.json.return_value = {
+        "id": github_id,
+        "login": login,
+        "avatar_url": avatar_url,
+    }
+    mock_client.get.return_value = user_response
+
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__.return_value = mock_client
+    mock_cm.__aexit__.return_value = None
+    return mock_cm
+
+
+async def test_auth_github_device_valid_token(client: AsyncClient, db_pool: asyncpg.Pool) -> None:
+    """POST /v1/auth/github-device with a valid access token returns contributor + JWT."""
+    mock_cm = await _mock_github_user_lookup(github_id=33333, login="device_alice")
+    with patch("kombinat.auth.httpx.AsyncClient", return_value=mock_cm):
+        resp = await client.post("/v1/auth/github-device", json={"access_token": "gho_valid_token"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "access_token" in data
+    assert "expires_in" in data
+    assert data["contributor"]["github_username"] == "device_alice"
+
+
+async def test_auth_github_device_invalid_token(client: AsyncClient) -> None:
+    """POST /v1/auth/github-device with an invalid access token returns 401."""
+    mock_cm = await _mock_github_user_lookup(status_code=401)
+    with patch("kombinat.auth.httpx.AsyncClient", return_value=mock_cm):
+        resp = await client.post("/v1/auth/github-device", json={"access_token": "gho_bogus"})
+    assert resp.status_code == 401
+
+
+async def test_auth_github_device_issues_valid_jwt(
+    client: AsyncClient, db_pool: asyncpg.Pool
+) -> None:
+    """JWT issued via device flow has the same shape as the web-flow JWT."""
+    settings = get_settings()
+    mock_cm = await _mock_github_user_lookup(github_id=44444)
+    with patch("kombinat.auth.httpx.AsyncClient", return_value=mock_cm):
+        resp = await client.post("/v1/auth/github-device", json={"access_token": "gho_x"})
+    data = resp.json()
+    decoded = pyjwt.decode(data["access_token"], settings.jwt_secret, algorithms=["HS256"])
+    assert decoded["github_id"] == 44444
+    assert "sub" in decoded
+    assert decoded["exp"] == decoded["iat"] + settings.jwt_expiry_seconds

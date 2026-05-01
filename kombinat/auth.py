@@ -9,8 +9,21 @@ import jwt
 from kombinat.config import get_settings
 
 
+async def fetch_github_user(access_token: str) -> dict[str, Any]:
+    """Look up a GitHub user via an OAuth access token. Raises ValueError if invalid."""
+    async with httpx.AsyncClient() as client:
+        user_resp = await client.get(
+            "https://api.github.com/user",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    if user_resp.status_code != 200:
+        raise ValueError("Invalid GitHub access token")
+    user_data: dict[str, Any] = user_resp.json()
+    return user_data
+
+
 async def exchange_github_code(code: str) -> dict[str, Any]:
-    """Exchange a GitHub OAuth code for user profile data."""
+    """Exchange a GitHub OAuth code (web flow) for user profile data."""
     settings = get_settings()
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(
