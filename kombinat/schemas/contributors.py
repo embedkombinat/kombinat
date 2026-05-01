@@ -21,6 +21,10 @@ class AuthRequest(BaseModel):
     state: str
 
 
+class DeviceAuthRequest(BaseModel):
+    access_token: str
+
+
 class AuthResponse(BaseModel):
     access_token: str
     expires_in: int

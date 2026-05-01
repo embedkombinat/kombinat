@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from kombinat.auth import create_jwt, exchange_github_code
+from kombinat.auth import create_jwt, exchange_github_code, fetch_github_user
 from kombinat.config import get_settings
 from kombinat.dependencies import get_current_contributor, get_db
 from kombinat.schemas.contributors import (
@@ -12,6 +12,7 @@ from kombinat.schemas.contributors import (
     AuthRequest,
     AuthResponse,
     ContributorOut,
+    DeviceAuthRequest,
 )
 
 if TYPE_CHECKING:
@@ -20,40 +21,12 @@ if TYPE_CHECKING:
 router = APIRouter(tags=["auth"])
 
 
-@router.get(
-    "/auth/config",
-    response_model=AuthConfigResponse,
-    status_code=200,
-    summary="Public OAuth client configuration",
-)
-async def auth_config() -> AuthConfigResponse:
-    """Return the public GitHub OAuth client_id so clients don't need to hardcode it."""
-    settings = get_settings()
-    return AuthConfigResponse(client_id=settings.github_client_id)
-
-
-@router.post(
-    "/auth/github",
-    response_model=AuthResponse,
-    status_code=200,
-    summary="Exchange GitHub OAuth code for kombinat JWT",
-    responses={401: {"description": "Invalid GitHub code"}},
-)
-async def auth_github(
-    body: AuthRequest,
-    db: asyncpg.Pool = Depends(get_db),  # noqa: B008
-) -> AuthResponse:
-    """Exchange a GitHub OAuth code for a kombinat access token."""
-    try:
-        user_data = await exchange_github_code(body.code)
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid GitHub code") from None
-
+async def _issue_jwt_for_github_user(user_data: dict[str, Any], db: asyncpg.Pool) -> AuthResponse:
+    """Upsert the contributor and issue a kombinat JWT, returning AuthResponse."""
     github_id = user_data["id"]
     github_username = user_data["login"]
     github_avatar_url = user_data.get("avatar_url")
 
-    # Upsert contributor
     row = await db.fetchrow(
         """INSERT INTO contributors (github_id, github_username, github_avatar_url)
         VALUES ($1, $2, $3)
@@ -89,6 +62,63 @@ async def auth_github(
         expires_in=settings.jwt_expiry_seconds,
         contributor=contributor,
     )
+
+
+@router.get(
+    "/auth/config",
+    response_model=AuthConfigResponse,
+    status_code=200,
+    summary="Public OAuth client configuration",
+)
+async def auth_config() -> AuthConfigResponse:
+    """Return the public GitHub OAuth client_id so clients don't need to hardcode it."""
+    settings = get_settings()
+    return AuthConfigResponse(client_id=settings.github_client_id)
+
+
+@router.post(
+    "/auth/github",
+    response_model=AuthResponse,
+    status_code=200,
+    summary="Exchange GitHub OAuth code for kombinat JWT",
+    responses={401: {"description": "Invalid GitHub code"}},
+)
+async def auth_github(
+    body: AuthRequest,
+    db: asyncpg.Pool = Depends(get_db),  # noqa: B008
+) -> AuthResponse:
+    """Exchange a GitHub OAuth code (web flow) for a kombinat access token."""
+    try:
+        user_data = await exchange_github_code(body.code)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid GitHub code") from None
+    return await _issue_jwt_for_github_user(user_data, db)
+
+
+@router.post(
+    "/auth/github-device",
+    response_model=AuthResponse,
+    status_code=200,
+    summary="Exchange GitHub access token (device flow) for kombinat JWT",
+    responses={401: {"description": "Invalid GitHub access token"}},
+)
+async def auth_github_device(
+    body: DeviceAuthRequest,
+    db: asyncpg.Pool = Depends(get_db),  # noqa: B008
+) -> AuthResponse:
+    """Exchange a GitHub access token (obtained via the device flow) for a kombinat JWT.
+
+    The CLI/Docker client runs the GitHub device flow itself (which has no
+    redirect-URI requirement and works on any host with no browser) and POSTs
+    the resulting GitHub access token here. We validate it by calling
+    `https://api.github.com/user`, then upsert the contributor and issue a
+    kombinat JWT exactly as the web-flow endpoint does.
+    """
+    try:
+        user_data = await fetch_github_user(body.access_token)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid GitHub access token") from None
+    return await _issue_jwt_for_github_user(user_data, db)
 
 
 @router.get(
