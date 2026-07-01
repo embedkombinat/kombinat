@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-import asyncpg
 from fastapi import APIRouter, Depends, HTTPException
 
 from kombinat.dependencies import get_current_contributor, get_db
@@ -14,6 +13,7 @@ from kombinat.validator.reputation import update_reputation
 if TYPE_CHECKING:
     import uuid
 
+    import asyncpg
     from asyncpg import Pool
 
 logger = logging.getLogger(__name__)

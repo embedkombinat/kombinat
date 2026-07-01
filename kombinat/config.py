@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -34,5 +36,8 @@ class Settings(BaseSettings):
     port: int = 8000
 
 
+@lru_cache
 def get_settings() -> Settings:
+    """Settings are immutable per-process; avoid re-reading the env and .env
+    file on every request (get_settings is called in hot request paths)."""
     return Settings()

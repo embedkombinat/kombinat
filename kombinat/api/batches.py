@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import random
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -96,8 +97,6 @@ async def claim_batch(
             contributor_id,
         )
 
-        import random
-
         all_rows = list(regular_rows) + list(honeypot_rows)
         random.shuffle(all_rows)
 
@@ -150,13 +149,11 @@ async def claim_batch(
             expires_at,
         )
 
-        # Link pairs to batch
-        for row in all_rows:
-            await conn.execute(
-                "INSERT INTO batch_pairs (batch_id, pair_id) VALUES ($1, $2)",
-                batch_id,
-                row["id"],
-            )
+        # Link pairs to batch in one round trip (batches can hold up to 500 pairs)
+        await conn.executemany(
+            "INSERT INTO batch_pairs (batch_id, pair_id) VALUES ($1, $2)",
+            [(batch_id, row["id"]) for row in all_rows],
+        )
 
     pairs = [
         PairBrief(

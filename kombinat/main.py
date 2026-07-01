@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -34,6 +35,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     task = asyncio.create_task(_expiry_loop(app))
     yield
     task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
     await close_pool(app.state.db)
 
 
