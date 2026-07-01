@@ -8,7 +8,6 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from kombinat.dependencies import get_current_contributor, get_db
 from kombinat.schemas.annotations import AnnotationResult, AnnotationSubmission
-from kombinat.validator.checks import honeypot_check
 from kombinat.validator.promote import maybe_promote_pair
 from kombinat.validator.reputation import update_reputation
 
@@ -37,10 +36,16 @@ async def submit_annotations(
     contributor: dict[str, Any] = Depends(get_current_contributor),  # noqa: B008
     db: asyncpg.Pool = Depends(get_db),  # noqa: B008
 ) -> AnnotationResult:
-    """Submit annotation labels for a claimed batch."""
+    """Submit annotation labels for a claimed batch.
+
+    The whole submission runs in a single transaction: annotation inserts,
+    contributor totals, pair promotion, and batch completion either all
+    persist or none do. Duplicates are absorbed with ON CONFLICT DO NOTHING
+    (an exception inside the transaction would abort it).
+    """
     contributor_id = contributor["id"]
 
-    # Validate batch
+    # Validate batch (reads only — safe outside the write transaction)
     batch = await db.fetchrow("SELECT * FROM batches WHERE id = $1", body.batch_id)
     if batch is None:
         logger.warning(
@@ -83,12 +88,6 @@ async def submit_annotations(
             ),
         )
 
-    # Get valid pair_ids for this batch
-    batch_pair_rows = await db.fetch(
-        "SELECT pair_id FROM batch_pairs WHERE batch_id = $1", body.batch_id
-    )
-    valid_pair_ids = {row["pair_id"] for row in batch_pair_rows}
-
     accepted = 0
     rejected = 0
     total_input = 0
@@ -96,29 +95,42 @@ async def submit_annotations(
     seen_pair_ids: set[uuid.UUID] = set()
     annotated_pair_ids: list[uuid.UUID] = []
     honeypot_results: list[bool] = []
+    pairs_verified = 0
 
-    for ann in body.annotations:
-        # Skip duplicates within this submission
-        if ann.pair_id in seen_pair_ids:
-            rejected += 1
-            continue
-        seen_pair_ids.add(ann.pair_id)
+    async with db.acquire() as conn, conn.transaction():
+        # Get valid pair_ids for this batch
+        batch_pair_rows = await conn.fetch(
+            "SELECT pair_id FROM batch_pairs WHERE batch_id = $1", body.batch_id
+        )
+        valid_pair_ids = {row["pair_id"] for row in batch_pair_rows}
 
-        # Skip pairs not in this batch
-        if ann.pair_id not in valid_pair_ids:
-            rejected += 1
-            continue
+        # Prefetch honeypot labels for the whole batch in one query
+        hp_rows = await conn.fetch(
+            "SELECT pair_id, known_label FROM honeypots WHERE pair_id = ANY($1::uuid[])",
+            list(valid_pair_ids),
+        )
+        honeypot_labels = {row["pair_id"]: int(row["known_label"]) for row in hp_rows}
 
-        # Check if this is a honeypot pair
-        hp_row = await db.fetchrow("SELECT 1 FROM honeypots WHERE pair_id = $1", ann.pair_id)
-        is_honeypot = hp_row is not None
+        for ann in body.annotations:
+            # Skip duplicates within this submission
+            if ann.pair_id in seen_pair_ids:
+                rejected += 1
+                continue
+            seen_pair_ids.add(ann.pair_id)
 
-        try:
-            await db.execute(
+            # Skip pairs not in this batch
+            if ann.pair_id not in valid_pair_ids:
+                rejected += 1
+                continue
+
+            is_honeypot = ann.pair_id in honeypot_labels
+
+            status = await conn.execute(
                 """INSERT INTO annotations
                 (pair_id, contributor_id, batch_id, label, model_id, quantization,
                  input_tokens, output_tokens, raw_response_hash, is_honeypot)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                ON CONFLICT (pair_id, contributor_id) DO NOTHING""",
                 ann.pair_id,
                 contributor_id,
                 body.batch_id,
@@ -130,64 +142,63 @@ async def submit_annotations(
                 ann.raw_response_hash,
                 is_honeypot,
             )
+            if status.split()[-1] == "0":
+                # Conflict: this contributor already annotated the pair
+                rejected += 1
+                continue
+
             accepted += 1
             total_input += ann.input_tokens
             total_output += ann.output_tokens
             annotated_pair_ids.append(ann.pair_id)
 
-            # Run honeypot check
             if is_honeypot:
-                hp_pass = await honeypot_check(db, ann.pair_id, ann.label)
-                honeypot_results.append(hp_pass)
+                honeypot_results.append(honeypot_labels[ann.pair_id] == ann.label)
 
-        except asyncpg.UniqueViolationError:
-            rejected += 1
-        except asyncpg.PostgresError:
-            logger.exception("Database error inserting annotation for pair %s", ann.pair_id)
-            rejected += 1
-
-    # Update contributor totals
-    await db.execute(
-        """UPDATE contributors SET
-            total_annotations = total_annotations + $2,
-            total_input_tokens = total_input_tokens + $3,
-            total_output_tokens = total_output_tokens + $4
-        WHERE id = $1""",
-        contributor_id,
-        accepted,
-        total_input,
-        total_output,
-    )
-
-    # Promote pairs that have reached required annotations
-    pairs_verified = 0
-    for pair_id in annotated_pair_ids:
-        promoted = await maybe_promote_pair(db, pair_id)
-        if promoted:
-            pairs_verified += 1
-
-    # Update reputation (stub: no-op in v0)
-    await update_reputation(db, contributor_id, honeypot_results)
-
-    # Mark batch as completed only if at least one annotation was accepted
-    if accepted > 0:
-        await db.execute(
-            "UPDATE batches SET status = 'completed', completed_at = NOW() WHERE id = $1",
-            body.batch_id,
+        # Update contributor totals
+        await conn.execute(
+            """UPDATE contributors SET
+                total_annotations = total_annotations + $2,
+                total_input_tokens = total_input_tokens + $3,
+                total_output_tokens = total_output_tokens + $4
+            WHERE id = $1""",
+            contributor_id,
+            accepted,
+            total_input,
+            total_output,
         )
+
+        # Promote pairs that have reached required annotations (honeypots never promote)
+        for pair_id in annotated_pair_ids:
+            if pair_id in honeypot_labels:
+                continue
+            promoted = await maybe_promote_pair(conn, pair_id)
+            if promoted:
+                pairs_verified += 1
+
+        # Update reputation (stub: no-op in v0)
+        await update_reputation(conn, contributor_id, honeypot_results)
+
+        # Mark batch as completed only if at least one annotation was accepted
+        if accepted > 0:
+            await conn.execute(
+                "UPDATE batches SET status = 'completed', completed_at = NOW() WHERE id = $1",
+                body.batch_id,
+            )
+
+        # Reload contributor for response
+        updated = await conn.fetchrow(
+            "SELECT total_input_tokens, total_output_tokens FROM contributors WHERE id = $1",
+            contributor_id,
+        )
+
+    if updated is None:
+        raise HTTPException(status_code=500, detail="Contributor record missing after update")
 
     # Compute honeypot accuracy
     honeypot_accuracy: float | None = None
     if honeypot_results:
         honeypot_accuracy = sum(honeypot_results) / len(honeypot_results)
-
-    # Reload contributor for response
-    updated = await db.fetchrow(
-        "SELECT total_input_tokens, total_output_tokens FROM contributors WHERE id = $1",
-        contributor_id,
-    )
-    if updated is None:
-        raise HTTPException(status_code=500, detail="Contributor record missing after update")
 
     return AnnotationResult(
         accepted=accepted,
@@ -216,9 +227,9 @@ async def _build_result_from_existing(
     )
     accepted = row["accepted"] if row else 0
 
-    # Honeypot accuracy from existing annotations
+    # Honeypot accuracy from existing annotations, compared in one query
     hp_rows = await db.fetch(
-        """SELECT a.label, h.pair_id
+        """SELECT a.label, h.known_label
            FROM annotations a
            JOIN honeypots h ON h.pair_id = a.pair_id
            WHERE a.batch_id = $1 AND a.contributor_id = $2""",
@@ -227,10 +238,7 @@ async def _build_result_from_existing(
     )
     honeypot_accuracy: float | None = None
     if hp_rows:
-        # Re-check honeypots the same way the original submission did
-        from kombinat.validator.checks import honeypot_check
-
-        results = [await honeypot_check(db, r["pair_id"], r["label"]) for r in hp_rows]
+        results = [int(r["known_label"]) == int(r["label"]) for r in hp_rows]
         honeypot_accuracy = sum(results) / len(results)
 
     updated = await db.fetchrow(
