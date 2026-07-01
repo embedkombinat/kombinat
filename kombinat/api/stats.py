@@ -93,6 +93,8 @@ async def get_leaderboard(
         WHERE total_annotations > 0
         ORDER BY total_annotations DESC
         LIMIT $1""",
-        min(limit, 50),
+        # Clamp instead of erroring so out-of-range values from third parties
+        # can't 500 this public endpoint (Postgres rejects negative LIMIT).
+        max(1, min(limit, 50)),
     )
     return LeaderboardOut(entries=[LeaderboardEntry(**dict(r)) for r in rows])

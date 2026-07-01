@@ -185,3 +185,25 @@ async def test_leaderboard_limit_capped_at_50(
     resp = await client.get("/v1/stats/leaderboard?limit=100")
     assert resp.status_code == 200
     assert len(resp.json()["entries"]) <= 50
+
+
+async def test_leaderboard_negative_limit_does_not_error(
+    client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """Out-of-range limit values are clamped, not passed to Postgres.
+
+    Regression test: LIMIT -1 raises InvalidRowCountInLimitClauseError,
+    turning a public unauthenticated endpoint into a free 500.
+    """
+    await db_pool.execute(
+        """INSERT INTO contributors (github_id, github_username, total_annotations)
+        VALUES ($1, $2, $3)""",
+        6000,
+        "clamp_user",
+        10,
+    )
+    for limit in (-1, 0):
+        resp = await client.get(f"/v1/stats/leaderboard?limit={limit}")
+        assert resp.status_code == 200
+        assert len(resp.json()["entries"]) == 1
