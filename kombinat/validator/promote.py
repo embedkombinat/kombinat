@@ -2,9 +2,20 @@ import asyncpg
 
 
 async def maybe_promote_pair(pool: asyncpg.Pool, pair_id: object) -> bool:
-    """Promote pair to verified/rejected if enough annotations exist. Returns True if promoted."""
-    row = await pool.fetchrow("SELECT required_annotations FROM pairs WHERE id = $1", pair_id)
-    if row is None:
+    """Promote pair to verified/rejected if enough annotations exist. Returns True if promoted.
+
+    Honeypot pairs are never promoted: their status must stay 'unlabeled' so they
+    remain claimable indefinitely for quality control. Promoting one would remove
+    it from the honeypot pool after `required_annotations` uses.
+    """
+    row = await pool.fetchrow(
+        """SELECT p.required_annotations, (h.pair_id IS NOT NULL) AS is_honeypot
+        FROM pairs p
+        LEFT JOIN honeypots h ON h.pair_id = p.id
+        WHERE p.id = $1""",
+        pair_id,
+    )
+    if row is None or row["is_honeypot"]:
         return False
 
     required = int(row["required_annotations"])

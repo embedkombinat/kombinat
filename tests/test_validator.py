@@ -121,3 +121,64 @@ async def test_reputation_update_noop(
     )
     assert row is not None
     assert row["reputation_score"] == original
+
+
+async def test_honeypot_pair_never_promoted(
+    db_pool: asyncpg.Pool,
+    honeypot_pairs: list[dict[str, Any]],
+) -> None:
+    """Honeypot pairs stay 'unlabeled' even after required_annotations are met.
+
+    Regression test: promoting a honeypot removes it from the claimable honeypot
+    pool (the claim query requires status = 'unlabeled'), draining quality
+    control after two uses per honeypot.
+    """
+    hp = honeypot_pairs[0]
+    pair_id = hp["id"]
+
+    contributors = []
+    for i, gid in enumerate([311, 322]):
+        c = await db_pool.fetchrow(
+            """INSERT INTO contributors (github_id, github_username)
+            VALUES ($1, $2) RETURNING *""",
+            gid,
+            f"hp_validator_c{i}",
+        )
+        assert c is not None
+        contributors.append(c)
+
+    for c in contributors:
+        batch_id = uuid.uuid4()
+        await db_pool.execute(
+            """INSERT INTO batches (id, contributor_id, size, expires_at)
+            VALUES ($1, $2, 1, NOW() + interval '24 hours')""",
+            batch_id,
+            c["id"],
+        )
+        await db_pool.execute(
+            "INSERT INTO batch_pairs (batch_id, pair_id) VALUES ($1, $2)",
+            batch_id,
+            pair_id,
+        )
+        await db_pool.execute(
+            """INSERT INTO annotations
+            (pair_id, contributor_id, batch_id, label, model_id, quantization,
+             input_tokens, output_tokens, raw_response_hash, is_honeypot)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE)""",
+            pair_id,
+            c["id"],
+            batch_id,
+            hp["known_label"],
+            "test-model",
+            "Q8_0",
+            100,
+            10,
+            "sha256:test",
+        )
+
+    promoted = await maybe_promote_pair(db_pool, pair_id)
+    assert promoted is False
+
+    row = await db_pool.fetchrow("SELECT status FROM pairs WHERE id = $1", pair_id)
+    assert row is not None
+    assert row["status"] == "unlabeled"
