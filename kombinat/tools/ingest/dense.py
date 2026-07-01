@@ -80,6 +80,10 @@ def build_dense_index(corpus: Corpus, config: IngestConfig) -> DenseIndex:
         batch_size=config.embedding_batch_size,
         show_progress_bar=False,
         convert_to_numpy=True,
+        # The index uses METRIC_INNER_PRODUCT; without unit-norm vectors that
+        # ranks by raw dot product, which is biased toward longer documents
+        # rather than cosine similarity.
+        normalize_embeddings=True,
     ).astype(np.float32)
 
     n = len(corpus.doc_texts)
@@ -139,4 +143,6 @@ def embed_queries(
         batch_size=config.embedding_batch_size,
         show_progress_bar=False,
         convert_to_numpy=True,
+        # Must match the document encoding: unit-norm so inner product = cosine.
+        normalize_embeddings=True,
     ).astype(np.float32)
