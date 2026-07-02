@@ -24,10 +24,14 @@ async def maybe_promote_pair(pool: asyncpg.Pool, pair_id: object) -> bool:
     if len(annotations) < required:
         return False
 
-    # Majority vote
+    # Majority vote on the binary relevance decision: labels 0-1 count as
+    # "not relevant", 2-3 as "relevant". Voting on the exact 0-3 label would
+    # reject adjacent-grade agreement like [2,3] — the most common outcome for
+    # LLM judges on genuinely relevant pairs — so nearly every hard pair would
+    # end up 'rejected'. The exact labels stay in the annotations table.
     labels = [int(a["label"]) for a in annotations]
-    majority_label = max(set(labels), key=labels.count)
-    agreement_count = labels.count(majority_label)
+    relevant_votes = sum(1 for label in labels if label >= 2)
+    agreement_count = max(relevant_votes, len(labels) - relevant_votes)
 
     if agreement_count > len(labels) // 2:
         await pool.execute("UPDATE pairs SET status = 'verified' WHERE id = $1", pair_id)

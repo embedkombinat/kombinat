@@ -182,3 +182,81 @@ async def test_honeypot_pair_never_promoted(
     row = await db_pool.fetchrow("SELECT status FROM pairs WHERE id = $1", pair_id)
     assert row is not None
     assert row["status"] == "unlabeled"
+
+
+async def _promote_with_labels(
+    db_pool: asyncpg.Pool, pair_id: object, labels: list[int]
+) -> str | None:
+    """Insert one annotation per label (distinct contributors) and promote."""
+    for i, label in enumerate(labels):
+        c = await db_pool.fetchrow(
+            """INSERT INTO contributors (github_id, github_username)
+            VALUES ($1, $2) RETURNING *""",
+            7000 + i,
+            f"bucket_c{i}",
+        )
+        assert c is not None
+        batch_id = uuid.uuid4()
+        await db_pool.execute(
+            """INSERT INTO batches (id, contributor_id, size, expires_at)
+            VALUES ($1, $2, 1, NOW() + interval '24 hours')""",
+            batch_id,
+            c["id"],
+        )
+        await db_pool.execute(
+            "INSERT INTO batch_pairs (batch_id, pair_id) VALUES ($1, $2)",
+            batch_id,
+            pair_id,
+        )
+        await db_pool.execute(
+            """INSERT INTO annotations
+            (pair_id, contributor_id, batch_id, label, model_id, quantization,
+             input_tokens, output_tokens, raw_response_hash)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+            pair_id,
+            c["id"],
+            batch_id,
+            label,
+            "test-model",
+            "Q8_0",
+            100,
+            10,
+            "sha256:test",
+        )
+    promoted = await maybe_promote_pair(db_pool, pair_id)
+    if not promoted:
+        return None
+    row = await db_pool.fetchrow("SELECT status FROM pairs WHERE id = $1", pair_id)
+    assert row is not None
+    return str(row["status"])
+
+
+async def test_adjacent_relevant_labels_verify(
+    db_pool: asyncpg.Pool,
+    seeded_pairs: list[dict[str, Any]],
+) -> None:
+    """[2,3] is agreement on 'relevant' — must verify, not reject.
+
+    Regression test: exact-label voting rejected adjacent grades, the most
+    common outcome for LLM judges on genuinely relevant pairs.
+    """
+    status = await _promote_with_labels(db_pool, seeded_pairs[1]["id"], [2, 3])
+    assert status == "verified"
+
+
+async def test_agreeing_negative_labels_verify(
+    db_pool: asyncpg.Pool,
+    seeded_pairs: list[dict[str, Any]],
+) -> None:
+    """[0,1] is agreement on 'not relevant' — a verified negative."""
+    status = await _promote_with_labels(db_pool, seeded_pairs[2]["id"], [0, 1])
+    assert status == "verified"
+
+
+async def test_cross_bucket_disagreement_rejects(
+    db_pool: asyncpg.Pool,
+    seeded_pairs: list[dict[str, Any]],
+) -> None:
+    """[1,2] straddles the relevance boundary — genuine disagreement."""
+    status = await _promote_with_labels(db_pool, seeded_pairs[3]["id"], [1, 2])
+    assert status == "rejected"
