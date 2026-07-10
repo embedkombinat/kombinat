@@ -36,7 +36,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
-        await task
+        # gather() drains the cancelled task; the bare `await task` form trips
+        # static analyzers into flagging a no-effect statement.
+        await asyncio.gather(task)
     await close_pool(app.state.db)
 
 
