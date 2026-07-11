@@ -55,22 +55,48 @@ def _doc_ids_path(config: IngestConfig) -> pathlib.Path:
     return pathlib.Path(config.faiss_index_dir).expanduser() / f"{_cache_key(config)}.doc_ids.json"
 
 
+def _meta_path(config: IngestConfig) -> pathlib.Path:
+    return pathlib.Path(config.faiss_index_dir).expanduser() / f"{_cache_key(config)}.meta.json"
+
+
+def _cache_fingerprint(config: IngestConfig) -> dict[str, object]:
+    """Build parameters that make a cached index compatible with the current run.
+
+    A cache built with a different embedding model or normalization setting
+    would silently degrade retrieval (e.g. normalized queries against a
+    non-normalized corpus index), so loading checks this fingerprint and
+    rebuilds on mismatch instead of trusting whatever is on disk.
+    """
+    return {"embedding_model": config.embedding_model, "normalized": True}
+
+
 def build_dense_index(corpus: Corpus, config: IngestConfig) -> DenseIndex:
     """Embed all documents and build FAISS IVFFlat index.
 
-    Saves index to disk. On re-run, loads from disk if file already exists.
+    Saves index to disk. On re-run, loads from disk if the cached index
+    exists AND its fingerprint (embedding model + normalization) matches;
+    otherwise the index is rebuilt. Caches from before fingerprinting have
+    no meta file and are rebuilt too.
     """
     idx_path = _index_path(config)
     ids_path = _doc_ids_path(config)
+    meta_path = _meta_path(config)
 
     if idx_path.exists() and ids_path.exists():
-        index = faiss.read_index(str(idx_path))
-        doc_ids: list[str] = json.loads(ids_path.read_text())
-        nlist = index.nlist if hasattr(index, "nlist") else 1
-        dim = index.d
-        nprobe = compute_nprobe(len(doc_ids), nlist, config.faiss_min_search_docs)
-        index.nprobe = nprobe
-        return DenseIndex(index=index, doc_ids=doc_ids, dimension=dim, nlist=nlist)
+        cached_meta: dict[str, object] | None = None
+        if meta_path.exists():
+            try:
+                cached_meta = json.loads(meta_path.read_text())
+            except json.JSONDecodeError:
+                cached_meta = None
+        if cached_meta == _cache_fingerprint(config):
+            index = faiss.read_index(str(idx_path))
+            doc_ids: list[str] = json.loads(ids_path.read_text())
+            nlist = index.nlist if hasattr(index, "nlist") else 1
+            dim = index.d
+            nprobe = compute_nprobe(len(doc_ids), nlist, config.faiss_min_search_docs)
+            index.nprobe = nprobe
+            return DenseIndex(index=index, doc_ids=doc_ids, dimension=dim, nlist=nlist)
 
     model = SentenceTransformer(config.embedding_model, device=config.embedding_device)
     dim = model.get_sentence_embedding_dimension()
@@ -100,6 +126,7 @@ def build_dense_index(corpus: Corpus, config: IngestConfig) -> DenseIndex:
     idx_path.parent.mkdir(parents=True, exist_ok=True)
     faiss.write_index(index, str(idx_path))
     ids_path.write_text(json.dumps(corpus.doc_ids))
+    meta_path.write_text(json.dumps(_cache_fingerprint(config)))
 
     return DenseIndex(
         index=index,

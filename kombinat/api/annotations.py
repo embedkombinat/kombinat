@@ -45,49 +45,6 @@ async def submit_annotations(
     """
     contributor_id = contributor["id"]
 
-    # Validate batch (reads only — safe outside the write transaction)
-    batch = await db.fetchrow("SELECT * FROM batches WHERE id = $1", body.batch_id)
-    if batch is None:
-        logger.warning(
-            "Batch not found: batch_id=%s contributor_id=%s", body.batch_id, contributor_id
-        )
-        raise HTTPException(status_code=404, detail=f"Batch {body.batch_id} not found")
-    if batch["contributor_id"] != contributor_id:
-        logger.warning(
-            "Batch owner mismatch: batch_id=%s batch_owner=%s request_contributor=%s",
-            body.batch_id,
-            batch["contributor_id"],
-            contributor_id,
-        )
-        raise HTTPException(
-            status_code=403,
-            detail=f"Batch {body.batch_id} is owned by another contributor",
-        )
-    if batch["status"] != "assigned":
-        # Idempotent retry: if the batch is already completed by this contributor,
-        # return the result from the existing annotations instead of erroring.
-        if batch["status"] == "completed":
-            logger.info(
-                "Idempotent retry: batch %s already completed by contributor %s",
-                body.batch_id,
-                contributor_id,
-            )
-            return await _build_result_from_existing(db, body.batch_id, contributor_id)
-
-        logger.warning(
-            "Batch status invalid for submission: batch_id=%s status=%s contributor_id=%s",
-            body.batch_id,
-            batch["status"],
-            contributor_id,
-        )
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Batch {body.batch_id} is in '{batch['status']}' status, expected 'assigned'. "
-                f"This batch may have expired (24h TTL) before annotations were submitted."
-            ),
-        )
-
     accepted = 0
     rejected = 0
     total_input = 0
@@ -98,6 +55,54 @@ async def submit_annotations(
     pairs_verified = 0
 
     async with db.acquire() as conn, conn.transaction():
+        # Lock and validate the batch inside the transaction: FOR UPDATE
+        # serializes against concurrent submissions of the same batch and the
+        # expiry sweep, so the status checked here is the status written
+        # against. (HTTPExceptions raised below roll the transaction back —
+        # nothing has been written yet.)
+        batch = await conn.fetchrow("SELECT * FROM batches WHERE id = $1 FOR UPDATE", body.batch_id)
+        if batch is None:
+            logger.warning(
+                "Batch not found: batch_id=%s contributor_id=%s", body.batch_id, contributor_id
+            )
+            raise HTTPException(status_code=404, detail=f"Batch {body.batch_id} not found")
+        if batch["contributor_id"] != contributor_id:
+            logger.warning(
+                "Batch owner mismatch: batch_id=%s batch_owner=%s request_contributor=%s",
+                body.batch_id,
+                batch["contributor_id"],
+                contributor_id,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail=f"Batch {body.batch_id} is owned by another contributor",
+            )
+        if batch["status"] != "assigned":
+            # Idempotent retry: if the batch is already completed by this contributor,
+            # return the result from the existing annotations instead of erroring.
+            if batch["status"] == "completed":
+                logger.info(
+                    "Idempotent retry: batch %s already completed by contributor %s",
+                    body.batch_id,
+                    contributor_id,
+                )
+                return await _build_result_from_existing(conn, body.batch_id, contributor_id)
+
+            logger.warning(
+                "Batch status invalid for submission: batch_id=%s status=%s contributor_id=%s",
+                body.batch_id,
+                batch["status"],
+                contributor_id,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Batch {body.batch_id} is in '{batch['status']}' status, "
+                    f"expected 'assigned'. This batch may have expired (24h TTL) "
+                    f"before annotations were submitted."
+                ),
+            )
+
         # Get valid pair_ids for this batch
         batch_pair_rows = await conn.fetch(
             "SELECT pair_id FROM batch_pairs WHERE batch_id = $1", body.batch_id
@@ -168,8 +173,10 @@ async def submit_annotations(
             total_output,
         )
 
-        # Promote pairs that have reached required annotations (honeypots never promote)
-        for pair_id in annotated_pair_ids:
+        # Promote pairs that have reached required annotations (honeypots never
+        # promote). Sorted so concurrent submissions with overlapping pairs
+        # acquire the pair row locks in the same order and can't deadlock.
+        for pair_id in sorted(annotated_pair_ids):
             if pair_id in honeypot_labels:
                 continue
             promoted = await maybe_promote_pair(conn, pair_id)
@@ -213,7 +220,7 @@ async def submit_annotations(
 
 
 async def _build_result_from_existing(
-    db: Pool, batch_id: uuid.UUID, contributor_id: uuid.UUID
+    db: Pool | asyncpg.Connection, batch_id: uuid.UUID, contributor_id: uuid.UUID
 ) -> AnnotationResult:
     """Reconstruct an AnnotationResult from already-persisted annotations (idempotent retry)."""
     row = await db.fetchrow(

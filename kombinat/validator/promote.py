@@ -8,11 +8,18 @@ async def maybe_promote_pair(pool: asyncpg.Pool, pair_id: object) -> bool:
     remain claimable indefinitely for quality control. Promoting one would remove
     it from the honeypot pool after `required_annotations` uses.
     """
+    # FOR UPDATE OF p serializes concurrent promotions of the same pair: when
+    # two submissions race, the second waits here and then counts the first's
+    # committed annotations, so a pair can't slip past its promotion point.
+    # Callers inside a transaction (the submission endpoint) hold the lock
+    # until commit; a bare pool call locks only for its implicit statement
+    # transaction, which is harmless.
     row = await pool.fetchrow(
         """SELECT p.required_annotations, (h.pair_id IS NOT NULL) AS is_honeypot
         FROM pairs p
         LEFT JOIN honeypots h ON h.pair_id = p.id
-        WHERE p.id = $1""",
+        WHERE p.id = $1
+        FOR UPDATE OF p""",
         pair_id,
     )
     if row is None or row["is_honeypot"]:

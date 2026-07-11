@@ -5,7 +5,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env")
+    # frozen: get_settings() caches one shared instance per process — freezing
+    # it turns any accidental mutation of process-wide config (jwt_secret,
+    # database_url, ...) into an immediate error instead of silent state.
+    model_config = SettingsConfigDict(env_file=".env", frozen=True)
 
     # Database
     database_url: str = "postgresql://kombinat:kombinat@localhost:5432/kombinat"
