@@ -194,3 +194,16 @@ def test_cli_retrieval_params_flow_through() -> None:
     assert cfg.bm25_top_k == 500
     assert cfg.dense_top_k == 300
     assert cfg.candidates_per_query == 50
+
+
+def test_default_candidate_budget_is_small() -> None:
+    """The per-query candidate budget multiplies the whole annotation workload
+    by 2N (required_annotations=2 per pair). Guard against it silently creeping
+    back to depths no contributor fleet can label (5000/query = ~400M pairs
+    from the squad split alone)."""
+    from kombinat.tools.ingest.config import IngestConfig
+
+    cfg = IngestConfig(split="squad")
+    assert cfg.candidates_per_query <= 50
+    assert cfg.bm25_top_k <= 2_000
+    assert cfg.dense_top_k <= 2_000
