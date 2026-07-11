@@ -30,6 +30,17 @@ async def test_model_family_unknown_and_empty(db_pool: asyncpg.Pool) -> None:
     assert model_family("") is None
 
 
+async def test_model_family_word_boundaries(db_pool: asyncpg.Pool) -> None:
+    """Families match only at word starts within the basename: 'phi' must not
+    hit mid-word (dol-PHI-n), version suffixes still count, and an org name
+    containing a keyword must not classify an unknown basename."""
+    assert model_family("dphn/dolphin-2.9-llama3-8b") == "llama"
+    assert model_family("Qwen/Qwen2.5-7B-Instruct") == "qwen"
+    assert model_family("meta-llama/Llama-3.1-8B-Instruct") == "llama"
+    assert model_family("microsoft/Phi-3.5-mini-instruct") == "phi"
+    assert model_family("mistralai/SomethingElse-7B") is None
+
+
 async def _annotate_pair(
     pool: asyncpg.Pool,
     pair_id: object,
@@ -148,6 +159,61 @@ async def test_claim_with_unknown_family_is_unsteered(
     resp = await authed_client.post(
         "/v1/batches/claim",
         json={"size": 1, "model_id": "some-org/UnknownNet-7B"},
+    )
+    assert resp.status_code == 201
+    claimed = {p["pair_id"] for p in resp.json()["pairs"]}
+    assert str(seeded_pairs[0]["id"]) in claimed
+
+
+async def test_sql_family_match_uses_word_boundaries(
+    authed_client: AsyncClient,
+    seeded_pairs: list[dict[str, Any]],
+    db_pool: asyncpg.Pool,
+) -> None:
+    """The SQL side must agree with model_family(): a dolphin (llama-family)
+    annotation is not a 'phi' match, and a phi judge is therefore still
+    handed that pair."""
+    await _annotate_pair(db_pool, seeded_pairs[0]["id"], 9400, "dphn/dolphin-2.9-llama3-8b")
+
+    # phi judge: dolphin is not family phi -> earliest pair still claimable
+    resp = await authed_client.post(
+        "/v1/batches/claim",
+        json={"size": 1, "model_id": "microsoft/Phi-3.5-mini-instruct"},
+    )
+    assert resp.status_code == 201
+    claimed = {p["pair_id"] for p in resp.json()["pairs"]}
+    assert str(seeded_pairs[0]["id"]) in claimed
+
+
+async def test_sql_family_match_steers_llama_from_dolphin(
+    authed_client: AsyncClient,
+    seeded_pairs: list[dict[str, Any]],
+    db_pool: asyncpg.Pool,
+) -> None:
+    """...and a llama judge IS steered away from the dolphin-labeled pair."""
+    await _annotate_pair(db_pool, seeded_pairs[0]["id"], 9500, "dphn/dolphin-2.9-llama3-8b")
+
+    resp = await authed_client.post(
+        "/v1/batches/claim",
+        json={"size": 1, "model_id": "meta-llama/Llama-3.1-8B-Instruct"},
+    )
+    assert resp.status_code == 201
+    claimed = {p["pair_id"] for p in resp.json()["pairs"]}
+    assert str(seeded_pairs[0]["id"]) not in claimed
+
+
+async def test_sql_family_match_ignores_org_segment(
+    authed_client: AsyncClient,
+    seeded_pairs: list[dict[str, Any]],
+    db_pool: asyncpg.Pool,
+) -> None:
+    """An org name containing a family keyword must not create a match when
+    the basename has none."""
+    await _annotate_pair(db_pool, seeded_pairs[0]["id"], 9600, "mistralai/UnknownNet-7B")
+
+    resp = await authed_client.post(
+        "/v1/batches/claim",
+        json={"size": 1, "model_id": "mistralai/Mistral-7B-Instruct-v0.3"},
     )
     assert resp.status_code == 201
     claimed = {p["pair_id"] for p in resp.json()["pairs"]}

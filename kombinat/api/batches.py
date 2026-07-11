@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 
 from kombinat.config import get_settings
 from kombinat.dependencies import get_current_contributor, get_db
-from kombinat.families import model_family
+from kombinat.families import family_sql_pattern, model_family
 from kombinat.schemas.batches import BatchClaimRequest, BatchOut
 from kombinat.schemas.pairs import PairBrief
 
@@ -55,12 +55,17 @@ async def claim_batch(
     family_filter = ""
     regular_params: list[object] = [regular_count, contributor_id]
     if family is not None:
+        # Match the family against the BASENAME of the stored model_id with a
+        # start-of-word boundary (~* '\mfam'), mirroring model_family() exactly:
+        # a plain substring over the full id would false-positive on org names
+        # and on mid-word hits like "phi" inside "dolphin".
         family_filter = """
                       AND NOT EXISTS (
                           SELECT 1 FROM annotations a
-                          WHERE a.pair_id = p.id AND a.model_id ILIKE $3
+                          WHERE a.pair_id = p.id
+                            AND regexp_replace(a.model_id, '^.*/', '') ~* $3
                       )"""
-        regular_params.append(f"%{family}%")
+        regular_params.append(family_sql_pattern(family))
 
     async with db.acquire() as conn, conn.transaction():
         # Claim regular (non-honeypot) pairs
@@ -132,9 +137,10 @@ async def claim_batch(
             if family is not None:
                 shortfall_order = (
                     "ORDER BY EXISTS (SELECT 1 FROM annotations a "
-                    "WHERE a.pair_id = p.id AND a.model_id ILIKE $4), p.created_at"
+                    "WHERE a.pair_id = p.id "
+                    "AND regexp_replace(a.model_id, '^.*/', '') ~* $4), p.created_at"
                 )
-                shortfall_params.append(f"%{family}%")
+                shortfall_params.append(family_sql_pattern(family))
             extra_rows = await conn.fetch(
                 f"""WITH claimable_extra AS (
                         SELECT p.id FROM pairs p
