@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 
 from kombinat.config import get_settings
 from kombinat.dependencies import get_current_contributor, get_db
+from kombinat.families import family_sql_pattern, model_family
 from kombinat.schemas.batches import BatchClaimRequest, BatchOut
 from kombinat.schemas.pairs import PairBrief
 
@@ -44,10 +45,33 @@ async def claim_batch(
     honeypot_count = math.ceil(requested_size * settings.honeypot_ratio)
     regular_count = requested_size - honeypot_count
 
+    # Judge-diversity steering: when the client reports which model it will
+    # label with, prefer pairs that have no annotation from that model's
+    # family yet — a same-family repeat at temperature 0 is a deterministic
+    # re-run, not an independent second opinion. The filter applies only to
+    # this preferred pass; the shortfall pass below has no family condition,
+    # so contributors still get full batches when only same-family pairs
+    # remain. Honeypots are exempt (reusable QC, any model).
+    family = model_family(body.model_id)
+    family_filter = ""
+    regular_params: list[object] = [regular_count, contributor_id]
+    if family is not None:
+        # Match the family against the BASENAME of the stored model_id with a
+        # start-of-word boundary (~* '\mfam'), mirroring model_family() exactly:
+        # a plain substring over the full id would false-positive on org names
+        # and on mid-word hits like "phi" inside "dolphin".
+        family_filter = """
+                      AND NOT EXISTS (
+                          SELECT 1 FROM annotations a
+                          WHERE a.pair_id = p.id
+                            AND regexp_replace(a.model_id, '^.*/', '') ~* $3
+                      )"""
+        regular_params.append(family_sql_pattern(family))
+
     async with db.acquire() as conn, conn.transaction():
         # Claim regular (non-honeypot) pairs
         regular_rows = await conn.fetch(
-            """WITH claimable AS (
+            f"""WITH claimable AS (
                     SELECT p.id FROM pairs p
                     WHERE p.status = 'unlabeled'
                       AND (SELECT COUNT(*) FROM annotations a WHERE a.pair_id = p.id)
@@ -63,14 +87,13 @@ async def claim_batch(
                       )
                       AND NOT EXISTS (
                           SELECT 1 FROM honeypots h WHERE h.pair_id = p.id
-                      )
+                      ){family_filter}
                     ORDER BY p.created_at
                     LIMIT $1
                     FOR UPDATE OF p SKIP LOCKED
                 )
                 SELECT p.* FROM pairs p JOIN claimable c ON p.id = c.id""",
-            regular_count,
-            contributor_id,
+            *regular_params,
         )
 
         # Claim honeypot pairs
@@ -100,12 +123,25 @@ async def claim_batch(
         all_rows = list(regular_rows) + list(honeypot_rows)
         random.shuffle(all_rows)
 
-        # If fewer honeypots than desired, fill remainder with regular pairs
+        # If fewer honeypots than desired, fill remainder with regular pairs.
+        # This pass has no family WHERE filter — it guarantees full batches
+        # even when only same-family pairs remain — but when a family is
+        # known it still *prefers* pairs that family hasn't labeled, so
+        # steering isn't bypassed for the honeypot-deficit slots.
         shortfall = requested_size - len(all_rows)
         if shortfall > 0:
             claimed_ids = {row["id"] for row in all_rows}
+            shortfall_order = "ORDER BY p.created_at"
+            shortfall_params: list[object] = [shortfall, contributor_id, list(claimed_ids)]
+            if family is not None:
+                shortfall_order = (
+                    "ORDER BY EXISTS (SELECT 1 FROM annotations a "
+                    "WHERE a.pair_id = p.id "
+                    "AND regexp_replace(a.model_id, '^.*/', '') ~* $4), p.created_at"
+                )
+                shortfall_params.append(family_sql_pattern(family))
             extra_rows = await conn.fetch(
-                """WITH claimable_extra AS (
+                f"""WITH claimable_extra AS (
                         SELECT p.id FROM pairs p
                         WHERE p.status = 'unlabeled'
                           AND (SELECT COUNT(*) FROM annotations a WHERE a.pair_id = p.id)
@@ -123,14 +159,12 @@ async def claim_batch(
                               SELECT 1 FROM honeypots h WHERE h.pair_id = p.id
                           )
                           AND p.id != ALL($3::uuid[])
-                        ORDER BY p.created_at
+                        {shortfall_order}
                         LIMIT $1
                         FOR UPDATE OF p SKIP LOCKED
                     )
                     SELECT p.* FROM pairs p JOIN claimable_extra c ON p.id = c.id""",
-                shortfall,
-                contributor_id,
-                list(claimed_ids),
+                *shortfall_params,
             )
             all_rows.extend(extra_rows)
 
