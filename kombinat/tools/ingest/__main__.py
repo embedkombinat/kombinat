@@ -4,7 +4,7 @@ CLI entry point for the kombinat ingest tool.
 Usage (run with uv from the kombinat/ project root):
     uv run python -m kombinat.tools.ingest --split squad
     uv run python -m kombinat.tools.ingest --split squad --max-docs 1000 --dry-run
-    uv run python -m kombinat.tools.ingest --split paq --bm25-top-k 10000 --dense-top-k 10000
+    uv run python -m kombinat.tools.ingest --split paq --bm25-top-k 2000 --dense-top-k 2000
     uv run python -m kombinat.tools.ingest --split paq --embedding-model all-mpnet-base-v2
 
 Requires the `ingest` extras: `uv sync --extra ingest`.
@@ -50,20 +50,24 @@ async def main() -> None:
     parser.add_argument(
         "--bm25-top-k",
         type=int,
-        default=10_000,
-        help="BM25 retrieval depth (default: 10000)",
+        default=1_000,
+        help="BM25 retrieval depth (default: 1000)",
     )
     parser.add_argument(
         "--dense-top-k",
         type=int,
-        default=10_000,
-        help="Dense retrieval depth (default: 10000)",
+        default=1_000,
+        help="Dense retrieval depth (default: 1000)",
     )
     parser.add_argument(
         "--candidates-per-query",
         type=int,
-        default=5_000,
-        help="Final candidates after RRF (default: 5000)",
+        default=10,
+        help=(
+            "Hard-negative candidates kept per query after RRF (default: 10). "
+            "Each candidate costs required_annotations (2) labels — this is "
+            "the annotation-budget knob, keep it small."
+        ),
     )
     parser.add_argument(
         "--rrf-k",

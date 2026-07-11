@@ -194,3 +194,48 @@ def test_cli_retrieval_params_flow_through() -> None:
     assert cfg.bm25_top_k == 500
     assert cfg.dense_top_k == 300
     assert cfg.candidates_per_query == 50
+
+
+def test_default_candidate_budget_is_small() -> None:
+    """The per-query candidate budget multiplies the whole annotation workload
+    by 2N (required_annotations=2 per pair). Assert the exact contract so a
+    workload regression can't slip in under a loose bound (5000/query =
+    ~400M pairs from the squad split alone)."""
+    from kombinat.tools.ingest.config import IngestConfig
+
+    cfg = IngestConfig(split="squad")
+    assert cfg.candidates_per_query == 10
+    assert cfg.bm25_top_k == 1_000
+    assert cfg.dense_top_k == 1_000
+
+
+def test_cli_parser_defaults_match_config() -> None:
+    """The argparse defaults in __main__.py duplicate IngestConfig's — this
+    pins them together so one side can't silently drift from the other."""
+    import argparse
+    from unittest.mock import patch
+
+    from kombinat.tools.ingest.config import IngestConfig
+
+    captured: dict[str, object] = {}
+    original_parse_args = argparse.ArgumentParser.parse_args
+
+    def capture(self: argparse.ArgumentParser, *args: object, **kwargs: object) -> object:
+        ns = original_parse_args(self, ["--split", "squad"])  # type: ignore[arg-type]
+        captured.update(vars(ns))
+        raise SystemExit(0)  # stop before the pipeline runs
+
+    with (
+        patch.object(argparse.ArgumentParser, "parse_args", capture),
+        pytest.raises(SystemExit),
+    ):
+        import asyncio
+
+        from kombinat.tools.ingest.__main__ import main
+
+        asyncio.run(main())
+
+    cfg = IngestConfig(split="squad")
+    assert captured["bm25_top_k"] == cfg.bm25_top_k
+    assert captured["dense_top_k"] == cfg.dense_top_k
+    assert captured["candidates_per_query"] == cfg.candidates_per_query

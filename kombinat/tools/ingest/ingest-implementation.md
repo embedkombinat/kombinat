@@ -40,11 +40,13 @@ HuggingFace dataset (one split, e.g. "squad")
 │       └── Batched encoding on MPS, model configurable via --embedding-model
 │
 ├── 4. For each query:
-│   ├── a. BM25 top-10K retrieval → ranked doc IDs
-│   ├── b. FAISS top-10K retrieval → ranked doc IDs
+│   ├── a. BM25 top-1K retrieval → ranked doc IDs
+│   ├── b. FAISS top-1K retrieval → ranked doc IDs
 │   ├── c. RRF fusion of both rankings
 │   ├── d. Filter out the known positive doc
-│   └── e. Take top-5K candidates as hard negatives
+│   └── e. Take top-10 candidates as hard negatives
+│         (every candidate costs 2 annotations — this is the
+│          project's annotation-budget knob; keep it small)
 │
 ├── 5. Build (query, doc) candidate pairs
 │
@@ -179,10 +181,10 @@ class IngestConfig(BaseModel):
     max_docs: int | None = None  # limit for development
 
     # Retrieval
-    bm25_top_k: int = 10_000
-    dense_top_k: int = 10_000
+    bm25_top_k: int = 1_000
+    dense_top_k: int = 1_000
     rrf_k: int = 60  # RRF constant
-    candidates_per_query: int = 5_000  # final candidates after RRF + filtering
+    candidates_per_query: int = 10  # final candidates after RRF + filtering (annotation-budget knob)
 
     # Embedding
     embedding_model: str = "all-MiniLM-L6-v2"
@@ -433,7 +435,8 @@ CLI entry point.
 Usage:
     uv run python -m kombinat.tools.ingest --split squad
     uv run python -m kombinat.tools.ingest --split squad --max-docs 1000 --dry-run
-    uv run python -m kombinat.tools.ingest --split paq --bm25-top-k 10000 --dense-top-k 10000
+    # deep-retrieval experiment (default depth is 1000; each kept candidate costs 2 annotations)
+    uv run python -m kombinat.tools.ingest --split paq --bm25-top-k 2000 --dense-top-k 2000
     uv run python -m kombinat.tools.ingest --split paq --embedding-model all-mpnet-base-v2
 """
 import argparse
@@ -455,9 +458,9 @@ def main():
     parser.add_argument("--split", required=True, help="Dataset split to process (e.g. squad, paq, wikipedia)")
 
     # Retrieval tuning
-    parser.add_argument("--bm25-top-k", type=int, default=10_000, help="BM25 retrieval depth (default: 10000)")
-    parser.add_argument("--dense-top-k", type=int, default=10_000, help="Dense retrieval depth (default: 10000)")
-    parser.add_argument("--candidates-per-query", type=int, default=5_000, help="Final candidates after RRF (default: 5000)")
+    parser.add_argument("--bm25-top-k", type=int, default=1_000, help="BM25 retrieval depth (default: 1000)")
+    parser.add_argument("--dense-top-k", type=int, default=1_000, help="Dense retrieval depth (default: 1000)")
+    parser.add_argument("--candidates-per-query", type=int, default=10, help="Hard-negative candidates kept per query after RRF (default: 10)")
     parser.add_argument("--rrf-k", type=int, default=60, help="RRF constant (default: 60)")
 
     # Embedding model
@@ -859,10 +862,10 @@ For squad split (25K docs, 25K queries, **brute force** — nprobe=nlist):
 - Document embedding: ~5 seconds
 - BM25 index build: ~2 seconds
 - FAISS IVF training + add: ~3 seconds
-- Query retrieval (25K queries × BM25 top-10K + FAISS top-10K): ~8 minutes
-- RRF + pair construction: ~2 minutes
-- Postgres write (up to 125M pairs at 5K/query): ~10 minutes
-- Total: ~25 minutes
+- Query retrieval (25K queries × BM25 top-1K + FAISS top-1K): ~1 minute
+- RRF + pair construction: ~30 seconds
+- Postgres write (up to 250K pairs at 10/query): ~10 seconds
+- Total: ~2 minutes
 
 For a 1M document split (e.g. gooaq, FAISS searches ~100K per query):
 - Document embedding: ~3.5 minutes
@@ -870,7 +873,7 @@ For a 1M document split (e.g. gooaq, FAISS searches ~100K per query):
 - Query retrieval: ~3 hours
 - Total: ~4 hours
 
-The deep retrieval (10K per method) is the bottleneck. If iteration speed matters more than coverage, use `--bm25-top-k 1000 --dense-top-k 1000 --candidates-per-query 500` for a 10× speedup. For large corpora, `--faiss-min-search-docs 200000` searches deeper at the cost of ~2× slower FAISS queries.
+Retrieval depth is the bottleneck. The defaults (1K per method, top-10 kept) are sized to the annotation budget: every kept candidate needs `required_annotations` (2) labels from contributors, so candidates-per-query multiplies the entire labeling workload by 2N. Depth beyond the fused top-N comes from re-mining with the improved embedding model in later training cycles, not from deeper static candidate lists. For large corpora, `--faiss-min-search-docs 200000` searches deeper at the cost of ~2× slower FAISS queries.
 
 ### Resume and re-run safety
 

@@ -11,11 +11,19 @@ class IngestConfig(BaseSettings):
     split: str = "squad"
     max_docs: int | None = None
 
-    # Retrieval
-    bm25_top_k: int = 10_000
-    dense_top_k: int = 10_000
+    # Retrieval.
+    # candidates_per_query is the project's annotation budget knob: every
+    # candidate needs required_annotations (2) labels, so N candidates/query
+    # multiplies the whole dataset by 2N. Contrastive training consumes a
+    # handful of hard negatives per query (ANCE/CDE use single digits), and
+    # deep-tail candidates are easy negatives that in-batch sampling already
+    # covers for free — verifying them wastes contributor GPU time. Depth
+    # beyond the fused top-N comes from re-mining with the improved model
+    # (see the manifesto's iterative cycle), not from deeper static lists.
+    bm25_top_k: int = 1_000
+    dense_top_k: int = 1_000
     rrf_k: int = 60
-    candidates_per_query: int = 5_000
+    candidates_per_query: int = 10
 
     # Embedding
     embedding_model: str = "all-MiniLM-L6-v2"
