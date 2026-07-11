@@ -3,18 +3,17 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-import asyncpg
 from fastapi import APIRouter, Depends, HTTPException
 
 from kombinat.dependencies import get_current_contributor, get_db
 from kombinat.schemas.annotations import AnnotationResult, AnnotationSubmission
-from kombinat.validator.checks import honeypot_check
 from kombinat.validator.promote import maybe_promote_pair
 from kombinat.validator.reputation import update_reputation
 
 if TYPE_CHECKING:
     import uuid
 
+    import asyncpg
     from asyncpg import Pool
 
 logger = logging.getLogger(__name__)
@@ -37,57 +36,14 @@ async def submit_annotations(
     contributor: dict[str, Any] = Depends(get_current_contributor),  # noqa: B008
     db: asyncpg.Pool = Depends(get_db),  # noqa: B008
 ) -> AnnotationResult:
-    """Submit annotation labels for a claimed batch."""
+    """Submit annotation labels for a claimed batch.
+
+    The whole submission runs in a single transaction: annotation inserts,
+    contributor totals, pair promotion, and batch completion either all
+    persist or none do. Duplicates are absorbed with ON CONFLICT DO NOTHING
+    (an exception inside the transaction would abort it).
+    """
     contributor_id = contributor["id"]
-
-    # Validate batch
-    batch = await db.fetchrow("SELECT * FROM batches WHERE id = $1", body.batch_id)
-    if batch is None:
-        logger.warning(
-            "Batch not found: batch_id=%s contributor_id=%s", body.batch_id, contributor_id
-        )
-        raise HTTPException(status_code=404, detail=f"Batch {body.batch_id} not found")
-    if batch["contributor_id"] != contributor_id:
-        logger.warning(
-            "Batch owner mismatch: batch_id=%s batch_owner=%s request_contributor=%s",
-            body.batch_id,
-            batch["contributor_id"],
-            contributor_id,
-        )
-        raise HTTPException(
-            status_code=403,
-            detail=f"Batch {body.batch_id} is owned by another contributor",
-        )
-    if batch["status"] != "assigned":
-        # Idempotent retry: if the batch is already completed by this contributor,
-        # return the result from the existing annotations instead of erroring.
-        if batch["status"] == "completed":
-            logger.info(
-                "Idempotent retry: batch %s already completed by contributor %s",
-                body.batch_id,
-                contributor_id,
-            )
-            return await _build_result_from_existing(db, body.batch_id, contributor_id)
-
-        logger.warning(
-            "Batch status invalid for submission: batch_id=%s status=%s contributor_id=%s",
-            body.batch_id,
-            batch["status"],
-            contributor_id,
-        )
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Batch {body.batch_id} is in '{batch['status']}' status, expected 'assigned'. "
-                f"This batch may have expired (24h TTL) before annotations were submitted."
-            ),
-        )
-
-    # Get valid pair_ids for this batch
-    batch_pair_rows = await db.fetch(
-        "SELECT pair_id FROM batch_pairs WHERE batch_id = $1", body.batch_id
-    )
-    valid_pair_ids = {row["pair_id"] for row in batch_pair_rows}
 
     accepted = 0
     rejected = 0
@@ -96,29 +52,90 @@ async def submit_annotations(
     seen_pair_ids: set[uuid.UUID] = set()
     annotated_pair_ids: list[uuid.UUID] = []
     honeypot_results: list[bool] = []
+    pairs_verified = 0
 
-    for ann in body.annotations:
-        # Skip duplicates within this submission
-        if ann.pair_id in seen_pair_ids:
-            rejected += 1
-            continue
-        seen_pair_ids.add(ann.pair_id)
+    async with db.acquire() as conn, conn.transaction():
+        # Lock and validate the batch inside the transaction: FOR UPDATE
+        # serializes against concurrent submissions of the same batch and the
+        # expiry sweep, so the status checked here is the status written
+        # against. (HTTPExceptions raised below roll the transaction back —
+        # nothing has been written yet.)
+        batch = await conn.fetchrow("SELECT * FROM batches WHERE id = $1 FOR UPDATE", body.batch_id)
+        if batch is None:
+            logger.warning(
+                "Batch not found: batch_id=%s contributor_id=%s", body.batch_id, contributor_id
+            )
+            raise HTTPException(status_code=404, detail=f"Batch {body.batch_id} not found")
+        if batch["contributor_id"] != contributor_id:
+            logger.warning(
+                "Batch owner mismatch: batch_id=%s batch_owner=%s request_contributor=%s",
+                body.batch_id,
+                batch["contributor_id"],
+                contributor_id,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail=f"Batch {body.batch_id} is owned by another contributor",
+            )
+        if batch["status"] != "assigned":
+            # Idempotent retry: if the batch is already completed by this contributor,
+            # return the result from the existing annotations instead of erroring.
+            if batch["status"] == "completed":
+                logger.info(
+                    "Idempotent retry: batch %s already completed by contributor %s",
+                    body.batch_id,
+                    contributor_id,
+                )
+                return await _build_result_from_existing(conn, body.batch_id, contributor_id)
 
-        # Skip pairs not in this batch
-        if ann.pair_id not in valid_pair_ids:
-            rejected += 1
-            continue
+            logger.warning(
+                "Batch status invalid for submission: batch_id=%s status=%s contributor_id=%s",
+                body.batch_id,
+                batch["status"],
+                contributor_id,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Batch {body.batch_id} is in '{batch['status']}' status, "
+                    f"expected 'assigned'. This batch may have expired (24h TTL) "
+                    f"before annotations were submitted."
+                ),
+            )
 
-        # Check if this is a honeypot pair
-        hp_row = await db.fetchrow("SELECT 1 FROM honeypots WHERE pair_id = $1", ann.pair_id)
-        is_honeypot = hp_row is not None
+        # Get valid pair_ids for this batch
+        batch_pair_rows = await conn.fetch(
+            "SELECT pair_id FROM batch_pairs WHERE batch_id = $1", body.batch_id
+        )
+        valid_pair_ids = {row["pair_id"] for row in batch_pair_rows}
 
-        try:
-            await db.execute(
+        # Prefetch honeypot labels for the whole batch in one query
+        hp_rows = await conn.fetch(
+            "SELECT pair_id, known_label FROM honeypots WHERE pair_id = ANY($1::uuid[])",
+            list(valid_pair_ids),
+        )
+        honeypot_labels = {row["pair_id"]: int(row["known_label"]) for row in hp_rows}
+
+        for ann in body.annotations:
+            # Skip duplicates within this submission
+            if ann.pair_id in seen_pair_ids:
+                rejected += 1
+                continue
+            seen_pair_ids.add(ann.pair_id)
+
+            # Skip pairs not in this batch
+            if ann.pair_id not in valid_pair_ids:
+                rejected += 1
+                continue
+
+            is_honeypot = ann.pair_id in honeypot_labels
+
+            status = await conn.execute(
                 """INSERT INTO annotations
                 (pair_id, contributor_id, batch_id, label, model_id, quantization,
                  input_tokens, output_tokens, raw_response_hash, is_honeypot)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                ON CONFLICT (pair_id, contributor_id) DO NOTHING""",
                 ann.pair_id,
                 contributor_id,
                 body.batch_id,
@@ -130,64 +147,65 @@ async def submit_annotations(
                 ann.raw_response_hash,
                 is_honeypot,
             )
+            if status.split()[-1] == "0":
+                # Conflict: this contributor already annotated the pair
+                rejected += 1
+                continue
+
             accepted += 1
             total_input += ann.input_tokens
             total_output += ann.output_tokens
             annotated_pair_ids.append(ann.pair_id)
 
-            # Run honeypot check
             if is_honeypot:
-                hp_pass = await honeypot_check(db, ann.pair_id, ann.label)
-                honeypot_results.append(hp_pass)
+                honeypot_results.append(honeypot_labels[ann.pair_id] == ann.label)
 
-        except asyncpg.UniqueViolationError:
-            rejected += 1
-        except asyncpg.PostgresError:
-            logger.exception("Database error inserting annotation for pair %s", ann.pair_id)
-            rejected += 1
-
-    # Update contributor totals
-    await db.execute(
-        """UPDATE contributors SET
-            total_annotations = total_annotations + $2,
-            total_input_tokens = total_input_tokens + $3,
-            total_output_tokens = total_output_tokens + $4
-        WHERE id = $1""",
-        contributor_id,
-        accepted,
-        total_input,
-        total_output,
-    )
-
-    # Promote pairs that have reached required annotations
-    pairs_verified = 0
-    for pair_id in annotated_pair_ids:
-        promoted = await maybe_promote_pair(db, pair_id)
-        if promoted:
-            pairs_verified += 1
-
-    # Update reputation (stub: no-op in v0)
-    await update_reputation(db, contributor_id, honeypot_results)
-
-    # Mark batch as completed only if at least one annotation was accepted
-    if accepted > 0:
-        await db.execute(
-            "UPDATE batches SET status = 'completed', completed_at = NOW() WHERE id = $1",
-            body.batch_id,
+        # Update contributor totals
+        await conn.execute(
+            """UPDATE contributors SET
+                total_annotations = total_annotations + $2,
+                total_input_tokens = total_input_tokens + $3,
+                total_output_tokens = total_output_tokens + $4
+            WHERE id = $1""",
+            contributor_id,
+            accepted,
+            total_input,
+            total_output,
         )
+
+        # Promote pairs that have reached required annotations (honeypots never
+        # promote). Sorted so concurrent submissions with overlapping pairs
+        # acquire the pair row locks in the same order and can't deadlock.
+        for pair_id in sorted(annotated_pair_ids):
+            if pair_id in honeypot_labels:
+                continue
+            promoted = await maybe_promote_pair(conn, pair_id)
+            if promoted:
+                pairs_verified += 1
+
+        # Update reputation (stub: no-op in v0)
+        await update_reputation(conn, contributor_id, honeypot_results)
+
+        # Mark batch as completed only if at least one annotation was accepted
+        if accepted > 0:
+            await conn.execute(
+                "UPDATE batches SET status = 'completed', completed_at = NOW() WHERE id = $1",
+                body.batch_id,
+            )
+
+        # Reload contributor for response
+        updated = await conn.fetchrow(
+            "SELECT total_input_tokens, total_output_tokens FROM contributors WHERE id = $1",
+            contributor_id,
+        )
+
+    if updated is None:
+        raise HTTPException(status_code=500, detail="Contributor record missing after update")
 
     # Compute honeypot accuracy
     honeypot_accuracy: float | None = None
     if honeypot_results:
         honeypot_accuracy = sum(honeypot_results) / len(honeypot_results)
-
-    # Reload contributor for response
-    updated = await db.fetchrow(
-        "SELECT total_input_tokens, total_output_tokens FROM contributors WHERE id = $1",
-        contributor_id,
-    )
-    if updated is None:
-        raise HTTPException(status_code=500, detail="Contributor record missing after update")
 
     return AnnotationResult(
         accepted=accepted,
@@ -202,7 +220,7 @@ async def submit_annotations(
 
 
 async def _build_result_from_existing(
-    db: Pool, batch_id: uuid.UUID, contributor_id: uuid.UUID
+    db: Pool | asyncpg.Connection, batch_id: uuid.UUID, contributor_id: uuid.UUID
 ) -> AnnotationResult:
     """Reconstruct an AnnotationResult from already-persisted annotations (idempotent retry)."""
     row = await db.fetchrow(
@@ -216,9 +234,9 @@ async def _build_result_from_existing(
     )
     accepted = row["accepted"] if row else 0
 
-    # Honeypot accuracy from existing annotations
+    # Honeypot accuracy from existing annotations, compared in one query
     hp_rows = await db.fetch(
-        """SELECT a.label, h.pair_id
+        """SELECT a.label, h.known_label
            FROM annotations a
            JOIN honeypots h ON h.pair_id = a.pair_id
            WHERE a.batch_id = $1 AND a.contributor_id = $2""",
@@ -227,10 +245,7 @@ async def _build_result_from_existing(
     )
     honeypot_accuracy: float | None = None
     if hp_rows:
-        # Re-check honeypots the same way the original submission did
-        from kombinat.validator.checks import honeypot_check
-
-        results = [await honeypot_check(db, r["pair_id"], r["label"]) for r in hp_rows]
+        results = [int(r["known_label"]) == int(r["label"]) for r in hp_rows]
         honeypot_accuracy = sum(results) / len(results)
 
     updated = await db.fetchrow(

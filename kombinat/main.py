@@ -34,6 +34,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     task = asyncio.create_task(_expiry_loop(app))
     yield
     task.cancel()
+    # return_exceptions=True absorbs the task's own CancelledError without a
+    # suppress() block that would also swallow a cancellation delivered to
+    # this lifespan coroutine during a forced shutdown.
+    await asyncio.gather(task, return_exceptions=True)
     await close_pool(app.state.db)
 
 

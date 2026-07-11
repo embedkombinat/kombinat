@@ -2,9 +2,27 @@ import asyncpg
 
 
 async def maybe_promote_pair(pool: asyncpg.Pool, pair_id: object) -> bool:
-    """Promote pair to verified/rejected if enough annotations exist. Returns True if promoted."""
-    row = await pool.fetchrow("SELECT required_annotations FROM pairs WHERE id = $1", pair_id)
-    if row is None:
+    """Promote pair to verified/rejected if enough annotations exist. Returns True if promoted.
+
+    Honeypot pairs are never promoted: their status must stay 'unlabeled' so they
+    remain claimable indefinitely for quality control. Promoting one would remove
+    it from the honeypot pool after `required_annotations` uses.
+    """
+    # FOR UPDATE OF p serializes concurrent promotions of the same pair: when
+    # two submissions race, the second waits here and then counts the first's
+    # committed annotations, so a pair can't slip past its promotion point.
+    # Callers inside a transaction (the submission endpoint) hold the lock
+    # until commit; a bare pool call locks only for its implicit statement
+    # transaction, which is harmless.
+    row = await pool.fetchrow(
+        """SELECT p.required_annotations, (h.pair_id IS NOT NULL) AS is_honeypot
+        FROM pairs p
+        LEFT JOIN honeypots h ON h.pair_id = p.id
+        WHERE p.id = $1
+        FOR UPDATE OF p""",
+        pair_id,
+    )
+    if row is None or row["is_honeypot"]:
         return False
 
     required = int(row["required_annotations"])
@@ -13,10 +31,14 @@ async def maybe_promote_pair(pool: asyncpg.Pool, pair_id: object) -> bool:
     if len(annotations) < required:
         return False
 
-    # Majority vote
+    # Majority vote on the binary relevance decision: labels 0-1 count as
+    # "not relevant", 2-3 as "relevant". Voting on the exact 0-3 label would
+    # reject adjacent-grade agreement like [2,3] — the most common outcome for
+    # LLM judges on genuinely relevant pairs — so nearly every hard pair would
+    # end up 'rejected'. The exact labels stay in the annotations table.
     labels = [int(a["label"]) for a in annotations]
-    majority_label = max(set(labels), key=labels.count)
-    agreement_count = labels.count(majority_label)
+    relevant_votes = sum(1 for label in labels if label >= 2)
+    agreement_count = max(relevant_votes, len(labels) - relevant_votes)
 
     if agreement_count > len(labels) // 2:
         await pool.execute("UPDATE pairs SET status = 'verified' WHERE id = $1", pair_id)

@@ -99,8 +99,8 @@ def test_build_dense_index_saves_to_disk(
     mock_enc = _mock_encoder()
     with patch("kombinat.tools.ingest.dense.SentenceTransformer", return_value=mock_enc):
         build_dense_index(tiny_corpus, ingest_config)
-    assert (tmp_faiss_dir / "squad.index").exists()
-    assert (tmp_faiss_dir / "squad.doc_ids.json").exists()
+    assert (tmp_faiss_dir / "squad_all-MiniLM-L6-v2.index").exists()
+    assert (tmp_faiss_dir / "squad_all-MiniLM-L6-v2.doc_ids.json").exists()
 
 
 def test_build_dense_index_loads_from_disk_on_rerun(
@@ -179,3 +179,34 @@ def test_build_dense_index_real_model_paris_in_top3(
     ]
     doc_ids = [did for did, _ in results]
     assert paris_id in doc_ids
+
+
+def test_stale_cache_without_fingerprint_is_rebuilt(
+    tiny_corpus: Corpus, ingest_config: IngestConfig
+) -> None:
+    """Caches from before fingerprinting (or with a mismatched embedding
+    model / normalization setting) must be rebuilt, not silently reused —
+    normalized queries against a non-normalized corpus index would degrade
+    ranking without any error."""
+    from kombinat.tools.ingest.dense import _meta_path
+
+    mock_enc = _mock_encoder()
+    with patch("kombinat.tools.ingest.dense.SentenceTransformer", return_value=mock_enc):
+        build_dense_index(tiny_corpus, ingest_config)
+        # Simulate a pre-fingerprint cache: index files exist, no meta sidecar
+        _meta_path(ingest_config).unlink()
+        mock_enc.encode.reset_mock()
+        build_dense_index(tiny_corpus, ingest_config)
+    mock_enc.encode.assert_called()
+
+
+def test_cache_with_different_model_is_rebuilt(
+    tiny_corpus: Corpus, ingest_config: IngestConfig
+) -> None:
+    mock_enc = _mock_encoder()
+    with patch("kombinat.tools.ingest.dense.SentenceTransformer", return_value=mock_enc):
+        build_dense_index(tiny_corpus, ingest_config)
+        mock_enc.encode.reset_mock()
+        changed = ingest_config.model_copy(update={"embedding_model": "all-mpnet-base-v2"})
+        build_dense_index(tiny_corpus, changed)
+    mock_enc.encode.assert_called()
