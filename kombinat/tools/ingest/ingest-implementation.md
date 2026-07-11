@@ -181,10 +181,10 @@ class IngestConfig(BaseModel):
     max_docs: int | None = None  # limit for development
 
     # Retrieval
-    bm25_top_k: int = 10_000
-    dense_top_k: int = 10_000
+    bm25_top_k: int = 1_000
+    dense_top_k: int = 1_000
     rrf_k: int = 60  # RRF constant
-    candidates_per_query: int = 5_000  # final candidates after RRF + filtering
+    candidates_per_query: int = 10  # final candidates after RRF + filtering (annotation-budget knob)
 
     # Embedding
     embedding_model: str = "all-MiniLM-L6-v2"
@@ -435,7 +435,8 @@ CLI entry point.
 Usage:
     uv run python -m kombinat.tools.ingest --split squad
     uv run python -m kombinat.tools.ingest --split squad --max-docs 1000 --dry-run
-    uv run python -m kombinat.tools.ingest --split paq --bm25-top-k 10000 --dense-top-k 10000
+    # deep-retrieval experiment (default depth is 1000; each kept candidate costs 2 annotations)
+    uv run python -m kombinat.tools.ingest --split paq --bm25-top-k 2000 --dense-top-k 2000
     uv run python -m kombinat.tools.ingest --split paq --embedding-model all-mpnet-base-v2
 """
 import argparse
