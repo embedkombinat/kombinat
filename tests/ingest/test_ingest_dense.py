@@ -99,8 +99,8 @@ def test_build_dense_index_saves_to_disk(
     mock_enc = _mock_encoder()
     with patch("kombinat.tools.ingest.dense.SentenceTransformer", return_value=mock_enc):
         build_dense_index(tiny_corpus, ingest_config)
-    assert (tmp_faiss_dir / "squad.index").exists()
-    assert (tmp_faiss_dir / "squad.doc_ids.json").exists()
+    assert (tmp_faiss_dir / "squad_all-MiniLM-L6-v2.index").exists()
+    assert (tmp_faiss_dir / "squad_all-MiniLM-L6-v2.doc_ids.json").exists()
 
 
 def test_build_dense_index_loads_from_disk_on_rerun(

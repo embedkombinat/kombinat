@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 from math import sqrt
 from typing import TYPE_CHECKING, Any
 
@@ -44,7 +45,11 @@ def compute_nprobe(n_docs: int, nlist: int, min_search_docs: int = 100_000) -> i
 
 def _cache_key(config: IngestConfig) -> str:
     suffix = f"_{config.max_docs}" if config.max_docs is not None else ""
-    return f"{config.split}{suffix}"
+    # The embedding model is part of the key so alternating models keeps a
+    # distinct cache per model instead of rebuilding the same files on every
+    # switch. Slugified: HF model ids can contain '/'.
+    model_slug = re.sub(r"[^A-Za-z0-9._-]+", "-", config.embedding_model)
+    return f"{config.split}{suffix}_{model_slug}"
 
 
 def _index_path(config: IngestConfig) -> pathlib.Path:
